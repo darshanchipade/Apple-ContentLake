@@ -224,7 +224,7 @@ export default function SearchPage() {
 
       <main className="mx-auto max-w-5xl px-6 py-10">
         <div className="rounded-[24px] border border-slate-200 bg-[#f9f9f9] px-6 py-12 shadow-sm md:px-16">
-          <div className="flex justify-end gap-4 text-sm font-semibold text-[#2180f9]">
+          <div className="flex justify-end gap-4 text-sm font-semibold text-[#000000]">
             <a href="/ingestion" className="hover:underline">
               Upload JSON
             </a>
@@ -251,7 +251,7 @@ export default function SearchPage() {
 
             {isLoadingSuggestions && <p className="text-sm text-slate-500">Loading suggestions…</p>}
             {refineError && (
-              <p className="text-sm text-rose-600" role="alert">
+              <p className="text-sm text-slate-600" role="alert">
                 {refineError}
               </p>
             )}
@@ -265,7 +265,7 @@ export default function SearchPage() {
             )}
 
             {searchError && (
-              <p className="text-sm text-rose-600" role="alert">
+              <p className="text-sm text-slate-600" role="alert">
                 {searchError}
               </p>
             )}

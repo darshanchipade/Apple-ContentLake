@@ -8,7 +8,12 @@ import {
   ExclamationCircleIcon,
   InboxStackIcon,
   MagnifyingGlassIcon,
+  DocumentIcon,
+  DocumentTextIcon,
+  Square2StackIcon,
+  TableCellsIcon,
 } from "@heroicons/react/24/outline";
+import { DocumentIcon as DocumentIconSolid } from "@heroicons/react/24/solid";
 import clsx from "clsx";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -58,10 +63,10 @@ const FeedbackPill = ({ feedback }: { feedback: Feedback }) => {
   const className = clsx(
     "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold",
     feedback.state === "success"
-      ? "bg-emerald-50 text-emerald-700"
+      ? "bg-slate-100 text-slate-900 border border-slate-200"
       : feedback.state === "error"
-        ? "bg-rose-50 text-rose-700"
-        : "bg-indigo-50 text-indigo-600",
+        ? "bg-slate-50 text-slate-500 border border-slate-200"
+        : "bg-slate-50 text-slate-600 border border-slate-200",
   );
   const Icon =
     feedback.state === "loading"
@@ -235,6 +240,7 @@ export default function ExtractionPage() {
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [snapshotVersion, setSnapshotVersion] = useState(0);
+  const [previewMode, setPreviewMode] = useState<"structured" | "raw">("structured");
 
   useEffect(() => {
     setHydrated(true);
@@ -400,14 +406,21 @@ export default function ExtractionPage() {
     });
   };
 
-  const renderTree = (nodes: TreeNode[]) =>
+  const renderTree = (nodes: TreeNode[], depth = 0) =>
     nodes.map((node) => {
       const hasChildren = Boolean(node.children?.length);
       const expanded = expandedNodes.has(node.id);
       const selected = activeNodeId === node.id;
 
+      // Hierarchical Icons
+      const Icon = hasChildren
+        ? depth === 0
+          ? Square2StackIcon
+          : TableCellsIcon
+        : DocumentIcon;
+
       return (
-        <div key={node.id} className="space-y-2">
+        <div key={node.id} className="space-y-1">
           <button
             type="button"
             onClick={() => {
@@ -415,31 +428,32 @@ export default function ExtractionPage() {
               if (hasChildren) toggleNode(node.id);
             }}
             className={clsx(
-              "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left",
-              selected ? "bg-indigo-50 text-indigo-700" : "text-slate-700",
+              "group flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left transition-all",
+              selected ? "bg-black text-white shadow-md" : "text-slate-600 hover:bg-slate-50",
             )}
           >
             {hasChildren ? (
-              <span className="text-slate-500">
+              <span className={clsx(selected ? "text-white" : "text-slate-400")}>
                 {expanded ? (
-                  <ChevronDownIcon className="size-4" />
+                  <ChevronDownIcon className="size-3.5" />
                 ) : (
-                  <ChevronRightIcon className="size-4" />
+                  <ChevronRightIcon className="size-3.5" />
                 )}
               </span>
             ) : (
-              <span className="size-4" />
+              <span className="size-3.5" />
             )}
-            <div className="flex flex-col">
-              <span className="text-sm font-medium">{node.label}</span>
-              {!hasChildren && (
-                <span className="text-xs text-slate-500">{node.path}</span>
+            <Icon
+              className={clsx(
+                "size-4 shrink-0",
+                selected ? "text-white" : "text-slate-400 group-hover:text-black",
               )}
-            </div>
+            />
+            <span className="truncate text-sm font-semibold">{node.label}</span>
           </button>
           {hasChildren && expanded && (
-            <div className="border-l border-slate-100 pl-4">
-              {renderTree(node.children!)}
+            <div className="ml-4 border-l border-slate-100 pl-2">
+              {renderTree(node.children!, depth + 1)}
             </div>
           )}
         </div>
@@ -558,170 +572,205 @@ export default function ExtractionPage() {
     context.metadata.sourceIdentifier ?? context.metadata.source ?? "—";
 
   return (
-    <PipelineShell currentStep="extraction">
+    <PipelineShell currentStep="extraction" breadcrumbExtra={context.metadata.name}>
       <StageHero
         title="Extraction"
         description="Data extracted and converted to JSON format (Postgres/Neon)."
         actionsSlot={<FeedbackPill feedback={feedback} />}
       />
 
-      <main className="mx-auto flex max-w-6xl flex-col gap-6 px-6 py-10">
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-wide text-slate-400">
-                  File structure
-                </p>
-                <h2 className="text-lg font-semibold text-slate-900">
-                  {context.metadata.name}
-                </h2>
+      <main className="mx-auto flex max-w-[1600px] flex-col gap-6 px-8 py-8">
+        <div className="grid h-[calc(100vh-20rem)] min-h-[600px] gap-6 lg:grid-cols-[320px_1fr_320px]">
+          {/* Left Pane: File Structure */}
+          <section className="flex flex-col rounded-3xl border border-slate-200 bg-white p-6 shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400">
+                File Structure
+              </h3>
+            </div>
+
+            <div className="relative mb-6">
+              <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="search"
+                placeholder="Search..."
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                className="w-full rounded-xl border border-slate-100 bg-slate-50 py-2.5 pl-10 pr-4 text-sm text-black focus:border-black focus:bg-white focus:outline-none transition-all"
+              />
+            </div>
+
+            <div className="flex-1 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
+              {snapshotLoading && context?.snapshotId && (
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 py-12 text-center text-sm text-slate-400 animate-pulse">
+                  Loading structure...
+                </div>
+              )}
+              {!snapshotLoading && filteredTree.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 py-12 text-center text-sm text-slate-400">
+                  No matches found.
+                </div>
+              ) : (
+                <div className="space-y-1">{renderTree(filteredTree)}</div>
+              )}
+            </div>
+          </section>
+
+          {/* Center Pane: Data Preview */}
+          <section className="flex flex-col rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between border-b border-slate-100 p-6">
+              <div className="flex items-center gap-4">
+                <div className="flex size-10 items-center justify-center rounded-xl bg-slate-50 text-black">
+                  <Square2StackIcon className="size-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-black leading-none">
+                    {activeNode?.label ?? "Select a node"}
+                  </h2>
+                  <p className="mt-1.5 text-xs font-medium text-slate-400">
+                    {activeNode?.path ?? "Choose an item from the structure"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center rounded-xl bg-slate-100 p-1">
+                <button
+                  onClick={() => setPreviewMode("raw")}
+                  className={clsx(
+                    "rounded-lg px-4 py-1.5 text-xs font-bold transition-all",
+                    previewMode === "raw" ? "bg-white text-black shadow-sm" : "text-slate-500",
+                  )}
+                >
+                  Raw
+                </button>
+                <button
+                  onClick={() => setPreviewMode("structured")}
+                  className={clsx(
+                    "rounded-lg px-4 py-1.5 text-xs font-bold transition-all",
+                    previewMode === "structured" ? "bg-white text-black shadow-sm" : "text-slate-500",
+                  )}
+                >
+                  Structured
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
+              {previewMode === "structured" ? (
+                <div className="rounded-2xl border border-slate-100 overflow-hidden">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                      <tr>
+                        <th className="px-6 py-4">Field Name</th>
+                        <th className="px-6 py-4">Field Value</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {activeNode && (
+                        <tr>
+                          <td className="px-6 py-5 font-bold text-black">{activeNode.label}</td>
+                          <td className="px-6 py-5 text-slate-600">
+                            {activeValue === undefined
+                              ? "—"
+                              : typeof activeValue === "object"
+                                ? JSON.stringify(activeValue)
+                                : String(activeValue)}
+                          </td>
+                        </tr>
+                      )}
+                      {activeNode?.children?.map((child) => {
+                        const childValue = parsedJson ? getValueAtPath(parsedJson, child.path.replace(/^[^\.]+\.?/, "")) : undefined;
+                        return (
+                          <tr key={child.id}>
+                            <td className="px-6 py-5 font-bold text-black">{child.label}</td>
+                            <td className="px-6 py-5 text-slate-600">
+                              {childValue === undefined
+                                ? "—"
+                                : typeof childValue === "object"
+                                  ? JSON.stringify(childValue)
+                                  : String(childValue)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="h-full rounded-2xl bg-slate-900 p-6 shadow-inner">
+                  <pre className="h-full overflow-auto text-sm font-mono text-slate-300 leading-relaxed scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
+                    {activeValue === undefined
+                      ? "// Select a node to view raw content"
+                      : JSON.stringify(activeValue, null, 2)}
+                  </pre>
+                </div>
+              )}
+            </div>
+
+            <div className="p-6 bg-white border-t border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                  Status
+                </span>
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-50 px-2.5 py-1 text-[10px] font-bold text-slate-700">
+                  <span className="size-1 rounded-full bg-slate-900" />
+                  Extracted
+                </span>
               </div>
               <button
                 type="button"
                 onClick={sendToCleansing}
                 disabled={sending}
                 className={clsx(
-                  "inline-flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white",
+                  "rounded-xl bg-black px-8 py-3 text-xs font-bold uppercase tracking-widest text-white shadow-lg shadow-black/20 transition-all hover:bg-slate-800 active:scale-95",
                   sending && "cursor-not-allowed opacity-60",
                 )}
               >
-                {sending ? (
-                  <>
-                    <ArrowPathIcon className="size-4 animate-spin" /> Sending…
-                  </>
-                ) : (
-                  "Send to Cleansing"
-                )}
+                {sending ? "Processing..." : "Send to Cleansing"}
               </button>
-            </div>
-            <div className="mt-4 flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
-              <InboxStackIcon className="size-4 text-slate-500" />
-              <span className="font-semibold text-slate-700">{sourceLabel}</span>
-            </div>
-            <div className="mt-4">
-              <div className="relative">
-                <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-2.5 size-4 text-slate-400" />
-                <input
-                  type="search"
-                  placeholder="Search fields..."
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none"
-                />
-              </div>
-              <div className="mt-4 max-h-[420px] space-y-3 overflow-y-auto pr-2">
-                {snapshotLoading && context?.snapshotId && (
-                  <div className="rounded-2xl border border-slate-200 bg-white py-6 text-center text-sm text-slate-600">
-                    Loading extracted data snapshot…
-                  </div>
-                )}
-                {!snapshotLoading && snapshotError && context?.snapshotId && (
-                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                    <p className="font-semibold">Unable to load the cached structure.</p>
-                    <p className="mt-1">{snapshotError}</p>
-                    <button
-                      type="button"
-                      onClick={retrySnapshotFetch}
-                      className="mt-3 rounded-full bg-amber-600 px-3 py-1 text-xs font-semibold text-white"
-                    >
-                      Retry download
-                    </button>
-                  </div>
-                )}
-                {filteredTree.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-500">
-                    Structure preview isn’t available yet. Re-run ingestion if this persists.
-                  </div>
-                ) : (
-                  <div className="space-y-3">{renderTree(filteredTree)}</div>
-                )}
-              </div>
             </div>
           </section>
 
-          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <p className="text-xs uppercase tracking-wide text-slate-400">
-              Data overview
-            </p>
-            <h2 className="text-lg font-semibold text-slate-900">
-              Field details
-            </h2>
-            <div className="mt-4 space-y-3 rounded-2xl bg-slate-50 p-4">
-              <div>
-                <p className="text-xs uppercase tracking-wide text-slate-400">
-                  Field
-                </p>
-                <p className="text-sm font-semibold text-slate-900">
-                  {activeNode?.label ?? "Select a node"}
-                </p>
-                {activeNode && (
-                  <p className="text-xs text-slate-500">{activeNode.path}</p>
-                )}
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-wide text-slate-400">
-                  Original value
-                </p>
-                <pre className="max-h-48 overflow-y-auto rounded-xl bg-white p-3 text-sm text-slate-800">
-                  {activeValue === undefined
-                    ? "—"
-                    : typeof activeValue === "object"
-                      ? JSON.stringify(activeValue, null, 2)
-                      : String(activeValue)}
-                </pre>
-              </div>
+          {/* Right Pane: File Metadata */}
+          <section className="flex flex-col rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-6">
+              File Metadata
+            </h3>
+
+            <div className="space-y-6 flex-1">
+              {[
+                { label: "Locale", value: context.metadata.locale ?? "—" },
+                { label: "Page ID", value: context.metadata.pageId ?? "—" },
+                { label: "Name", value: context.metadata.name },
+                { label: "Size", value: formatBytes(context.metadata.size) },
+                { label: "Source Type", value: sourceLabel },
+                { label: "Uploaded", value: new Date(context.metadata.uploadedAt).toLocaleString() },
+              ].map((item) => (
+                <div key={item.label} className="group">
+                  <dt className="text-[10px] font-bold uppercase tracking-widest text-slate-400 transition-colors group-hover:text-black">
+                    {item.label}
+                  </dt>
+                  <dd className="mt-1.5 text-sm font-bold text-black break-all">
+                    {item.value}
+                  </dd>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-8 pt-6 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  clearExtractionContext();
+                  router.push("/ingestion");
+                }}
+                className="w-full rounded-xl border border-slate-200 py-3 text-xs font-bold uppercase tracking-widest text-slate-400 hover:border-black hover:text-black transition-all"
+              >
+                Start Over
+              </button>
             </div>
           </section>
         </div>
-
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold text-slate-900">File metadata</h3>
-            <button
-              type="button"
-              onClick={() => {
-                clearExtractionContext();
-                router.push("/ingestion");
-              }}
-              className="text-xs font-semibold text-indigo-600"
-            >
-              Start over
-            </button>
-          </div>
-          <dl className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-400">Name</dt>
-              <dd className="text-sm font-semibold text-slate-900">{context.metadata.name}</dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-400">Size</dt>
-              <dd className="text-sm font-semibold text-slate-900">
-                {formatBytes(context.metadata.size)}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-400">Source type</dt>
-              <dd className="text-sm font-semibold text-slate-900">{sourceLabel}</dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-400">Source identifier</dt>
-              <dd className="text-sm font-semibold text-slate-900 break-all">{sourceIdentifier}</dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-400">Cleansed ID</dt>
-              <dd className="text-sm font-semibold text-slate-900">
-                {context.metadata.cleansedId ?? "—"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-400">Uploaded</dt>
-              <dd className="text-sm font-semibold text-slate-900">
-                {new Date(context.metadata.uploadedAt).toLocaleString()}
-              </dd>
-            </div>
-          </dl>
-        </section>
       </main>
     </PipelineShell>
   );

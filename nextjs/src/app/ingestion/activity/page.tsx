@@ -19,18 +19,18 @@ import {
 const statusStyles = {
   uploading: {
     label: "Uploading",
-    className: "bg-amber-50 text-amber-700",
-    dot: "bg-amber-400",
+    className: "bg-slate-50 text-slate-700",
+    dot: "bg-slate-400",
   },
   success: {
     label: "Accepted",
-    className: "bg-emerald-50 text-emerald-700",
-    dot: "bg-emerald-500",
+    className: "bg-slate-100 text-slate-900",
+    dot: "bg-slate-900",
   },
   error: {
     label: "Error",
-    className: "bg-rose-50 text-rose-700",
-    dot: "bg-rose-500",
+    className: "bg-slate-50 text-slate-500",
+    dot: "bg-slate-300",
   },
 } satisfies Record<
   UploadHistoryItem["status"],
@@ -132,31 +132,27 @@ export default function UploadActivityPage() {
   };
 
   return (
-    <PipelineShell currentStep="ingestion">
+    <PipelineShell currentStep="ingestion" breadcrumbExtra="Upload Activity">
       <StageHero
         title="Upload activity"
         description="Review previous uploads, download payloads, and inspect metadata captured during ingestion."
       />
 
-      <main className="mx-auto grid max-w-6xl gap-6 px-6 py-10 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
+      <main className="mx-auto flex max-w-[1600px] flex-col gap-6 px-8 py-8 lg:flex-row">
+        <section className="flex-[1.2] rounded-3xl border border-slate-200 bg-white p-6 shadow-sm flex flex-col">
+          <div className="flex items-center justify-between gap-3 mb-6">
             <div>
-              <p className="text-xs uppercase tracking-wide text-slate-400">Upload history</p>
-              <h2 className="text-lg font-semibold text-slate-900">Recent files</h2>
-            </div>
-            <div className="flex items-center gap-2 rounded-full bg-slate-50 px-3 py-1 text-xs text-slate-600">
-              <InboxStackIcon className="size-4 text-slate-500" />
-              {uploads.length
-                ? `${Math.min(uploads.length, 25)} tracked`
-                : "No uploads tracked yet"}
+              <h2 className="text-xl font-bold text-black uppercase tracking-tight">Recent Files</h2>
+              <p className="mt-1 text-xs font-medium text-slate-400">
+                {uploads.length} files tracked in history
+              </p>
             </div>
           </div>
 
-          <div className="mt-6 space-y-4">
+          <div className="space-y-3 flex-1 overflow-auto pr-2 scrollbar-thin scrollbar-thumb-slate-200">
             {uploads.length === 0 && (
-              <div className="rounded-2xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-500">
-                Uploads will appear here once you submit files from the ingestion screen.
+              <div className="rounded-2xl border border-dashed border-slate-100 py-20 text-center opacity-40">
+                <p className="text-sm font-medium text-slate-500 uppercase tracking-widest">No activity found</p>
               </div>
             )}
             {uploads.map((upload) => {
@@ -167,60 +163,59 @@ export default function UploadActivityPage() {
                 <div
                   key={upload.id}
                   className={clsx(
-                    "rounded-2xl border px-4 py-3 transition",
+                    "group relative rounded-2xl border p-4 transition-all",
                     isActive
-                      ? "border-slate-900 bg-slate-900/[0.04] shadow-[0_18px_35px_rgba(15,23,42,0.08)]"
+                      ? "border-black bg-white ring-1 ring-black shadow-lg"
                       : "border-slate-100 bg-slate-50 hover:border-slate-300",
                   )}
                 >
                   <button
                     type="button"
                     onClick={() => setActiveUploadId(upload.id)}
-                    className="flex w-full flex-wrap items-center justify-between gap-4 text-left"
+                    className="flex w-full items-center justify-between gap-4 text-left"
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="rounded-2xl bg-white p-2 shadow-sm">
-                        <DocumentTextIcon className="size-5 text-slate-500" />
+                    <div className="flex items-center gap-4">
+                      <div className={clsx(
+                        "flex size-10 items-center justify-center rounded-xl transition-colors",
+                        isActive ? "bg-black text-white" : "bg-white text-slate-400 group-hover:bg-black group-hover:text-white"
+                      )}>
+                        <DocumentTextIcon className="size-5" />
                       </div>
                       <div>
-                        <p className="text-sm font-semibold text-slate-900">{upload.name}</p>
-                        <p className="text-xs text-slate-500">
-                          {new Date(upload.createdAt).toLocaleString()} • {upload.source}
+                        <p className="text-sm font-bold text-black truncate max-w-[200px]">{upload.name}</p>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                          {new Date(upload.createdAt).toLocaleDateString()} • {upload.source}
                         </p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={clsx(
-                          "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold",
-                          status.className,
-                        )}
-                      >
-                        <span className={clsx("size-2 rounded-full", status.dot)} />
-                        {status.label}
-                      </span>
-                    </div>
+                    <span
+                      className={clsx(
+                        "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-wider",
+                        status.className,
+                      )}
+                    >
+                      <span className={clsx("size-1.5 rounded-full", status.dot)} />
+                      {status.label}
+                    </span>
                   </button>
-                  <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
+
+                  <div className="mt-4 flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
                       type="button"
                       onClick={() => handleDownloadUpload(upload)}
                       disabled={downloading}
-                      className={clsx(
-                        "inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold text-slate-900 transition hover:bg-slate-900/10",
-                        downloading && "cursor-wait opacity-60",
-                      )}
+                      className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-black transition-all"
+                      title="Download"
                     >
                       <ArrowDownTrayIcon className="size-4" />
-                      Download
                     </button>
                     <button
                       type="button"
                       onClick={() => handleDeleteUpload(upload.id)}
-                      className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold text-slate-900 transition hover:bg-slate-900/10"
+                      className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-500 transition-all"
+                      title="Delete"
                     >
                       <TrashIcon className="size-4" />
-                      Delete
                     </button>
                   </div>
                 </div>
@@ -229,85 +224,46 @@ export default function UploadActivityPage() {
           </div>
         </section>
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center justify-between">
+        <section className="flex-1 rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <div className="flex items-center justify-between mb-8 pb-6 border-b border-slate-100">
             <div>
-              <p className="text-xs uppercase tracking-wide text-slate-400">File metadata</p>
-              <h3 className="text-lg font-semibold text-slate-900">
-                {activeUpload ? activeUpload.name : "Select an upload"}
+              <h3 className="text-lg font-bold text-black uppercase tracking-tight">
+                File Metadata
               </h3>
+              <p className="mt-1 text-xs font-medium text-slate-400 truncate max-w-[300px]">
+                {activeUpload ? activeUpload.name : "Select an upload"}
+              </p>
             </div>
-            {activeUpload && (
-              <span className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">
-                {activeUpload.source}
-              </span>
-            )}
           </div>
 
           {activeUpload ? (
-            <div className="mt-5 space-y-5">
-              <dl className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <dt className="text-xs uppercase tracking-wide text-slate-400">Uploaded</dt>
-                  <dd className="text-sm font-semibold text-slate-900">
-                    {new Date(activeUpload.createdAt).toLocaleString()}
-                  </dd>
+            <div className="space-y-6">
+              {[
+                { label: "Status", value: activeUpload.backendStatus ?? "COMPLETED" },
+                { label: "Locale", value: activeUpload.locale ?? "—" },
+                { label: "Page ID", value: activeUpload.pageId ?? "—" },
+                { label: "Source Type", value: activeUpload.sourceType ?? activeUpload.source },
+                { label: "Cleansed ID", value: activeUpload.cleansedId ?? "—" },
+                { label: "Uploaded", value: new Date(activeUpload.createdAt).toLocaleString() },
+                { label: "File Size", value: formatBytes(activeUpload.size) },
+              ].map(item => (
+                <div key={item.label} className="group">
+                  <dt className="text-[10px] font-bold uppercase tracking-widest text-slate-400 group-hover:text-black transition-colors">{item.label}</dt>
+                  <dd className="mt-1.5 text-sm font-bold text-black break-all">{item.value}</dd>
                 </div>
-                <div>
-                  <dt className="text-xs uppercase tracking-wide text-slate-400">Size</dt>
-                  <dd className="text-sm font-semibold text-slate-900">
-                    {formatBytes(activeUpload.size)}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs uppercase tracking-wide text-slate-400">Source type</dt>
-                  <dd className="text-sm font-semibold text-slate-900">
-                    {activeUpload.sourceType ?? activeUpload.source}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs uppercase tracking-wide text-slate-400">
-                    Source identifier
-                  </dt>
-                  <dd className="text-sm font-semibold text-slate-900 break-all">
-                    {activeUpload.sourceIdentifier ?? "—"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs uppercase tracking-wide text-slate-400">Cleansed ID</dt>
-                  <dd className="text-sm font-semibold text-slate-900">
-                    {activeUpload.cleansedId ?? "—"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs uppercase tracking-wide text-slate-400">Locale</dt>
-                  <dd className="text-sm font-semibold text-slate-900">
-                    {activeUpload.locale ?? "—"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs uppercase tracking-wide text-slate-400">Page ID</dt>
-                  <dd className="text-sm font-semibold text-slate-900">
-                    {activeUpload.pageId ?? "—"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs uppercase tracking-wide text-slate-400">Backend status</dt>
-                  <dd className="text-sm font-semibold text-slate-900">
-                    {activeUpload.backendStatus ?? "—"}
-                  </dd>
-                </div>
-              </dl>
+              ))}
+
               {activeUpload.backendMessage && (
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-700">
-                  <p className="text-xs uppercase tracking-wide text-slate-400">Backend message</p>
-                  <p className="mt-1">{activeUpload.backendMessage}</p>
+                <div className="mt-8 rounded-2xl bg-slate-50 p-6 border border-slate-100">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Backend Message</p>
+                  <p className="text-xs text-slate-600 leading-relaxed font-medium">{activeUpload.backendMessage}</p>
                 </div>
               )}
             </div>
           ) : (
-            <div className="mt-10 rounded-2xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-500">
-              Select an upload from the list to inspect its metadata.
+            <div className="py-20 text-center opacity-40">
+              <InboxStackIcon className="size-10 mx-auto mb-4 text-slate-300" />
+              <p className="text-sm font-medium text-slate-400 uppercase tracking-widest">Select an item to view details</p>
             </div>
           )}
         </section>

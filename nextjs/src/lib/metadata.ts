@@ -28,22 +28,22 @@ export const extractLocaleAndPageId = (
 ): { locale?: string; pageId?: string } => {
   if (!payload || typeof payload !== "object") return {};
   const visited = new Set<object>();
-  const stack: unknown[] = [payload];
-  const MAX_NODES = 1500;
+  // Use BFS (Queue) instead of DFS (Stack) to prioritize root-level metadata
+  const queue: unknown[] = [payload];
+  const MAX_NODES = 1000;
   let locale: string | undefined;
   let pageId: string | undefined;
 
-  while (stack.length && visited.size < MAX_NODES && (!locale || !pageId)) {
-    const current = stack.pop();
+  while (queue.length && visited.size < MAX_NODES && (!locale || !pageId)) {
+    const current = queue.shift();
     if (!current || typeof current !== "object") continue;
     if (visited.has(current as object)) continue;
     visited.add(current as object);
 
     if (Array.isArray(current)) {
-      for (let index = current.length - 1; index >= 0; index -= 1) {
-        const entry = current[index];
+      for (const entry of current) {
         if (entry && typeof entry === "object") {
-          stack.push(entry);
+          queue.push(entry);
         }
       }
       continue;
@@ -63,7 +63,7 @@ export const extractLocaleAndPageId = (
 
     for (const value of Object.values(record)) {
       if (value && typeof value === "object") {
-        stack.push(value);
+        queue.push(value);
       }
     }
   }

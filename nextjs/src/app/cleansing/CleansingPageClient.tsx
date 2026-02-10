@@ -12,6 +12,7 @@ import { PipelineShell } from "@/components/PipelineShell";
 import { StageHero } from "@/components/StageHero";
 import { pickLocale, pickPageId } from "@/lib/metadata";
 import { describeSourceLabel, inferSourceType, pickString } from "@/lib/source";
+import clsx from 'clsx';
 
 const RULES = [
   {
@@ -189,16 +190,24 @@ const FeedbackPill = ({ feedback }: { feedback: Feedback }) => {
   if (feedback.state === "idle") return null;
   const base =
     feedback.state === "loading"
-      ? "bg-indigo-50 text-indigo-600"
+      ? "bg-slate-50 text-slate-600"
       : feedback.state === "success"
-        ? "bg-emerald-50 text-emerald-700"
-        : "bg-rose-50 text-rose-700";
+        ? "bg-slate-100 text-slate-900 border border-slate-200"
+        : "bg-slate-50 text-slate-500 border border-slate-200";
 
   return (
-    <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold ${base}`}>
-      {feedback.state === "loading"
-        ? "Triggering enrichment…"
-        : feedback.message ?? (feedback.state === "success" ? "Enrichment triggered." : "Something went wrong.")}
+    <div className={`inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider ${base}`}>
+      {feedback.state === "loading" ? (
+        <>
+          <span className="size-1.5 rounded-full bg-slate-400 animate-pulse" />
+          Triggering enrichment…
+        </>
+      ) : (
+        <>
+          <span className={clsx("size-1.5 rounded-full", feedback.state === "success" ? "bg-black" : "bg-slate-300")} />
+          {feedback.message ?? (feedback.state === "success" ? "Enrichment triggered." : "Something went wrong.")}
+        </>
+      )}
     </div>
   );
 };
@@ -442,195 +451,155 @@ export default function CleansingPageClient() {
   const sourceIdentifier = context.metadata.sourceIdentifier ?? "—";
 
   return (
-    <PipelineShell currentStep="cleansing">
+    <PipelineShell currentStep="cleansing" breadcrumbExtra={context.metadata.name}>
       <StageHero
         title="Cleansing"
         description={`Review cleansed output for ${context.metadata.name} before sending it forward.`}
         actionsSlot={<FeedbackPill feedback={enrichmentFeedback} />}
       />
 
-      <main className="mx-auto flex max-w-6xl flex-col gap-6 px-6 py-10">
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-wide text-slate-400">Status</p>
-              <h2 className="text-lg font-semibold text-slate-900">
-                {context.status ?? "Pending"}
-              </h2>
-            </div>
-            <div className="text-xs text-slate-500">
-              <p>Uploaded</p>
-              <p className="font-semibold text-slate-800">
-                {new Date(context.metadata.uploadedAt).toLocaleString()}
-              </p>
-            </div>
-          </div>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-400">
-                Cleansed ID
-              </dt>
-              <dd className="text-sm font-semibold text-slate-900">
-                {context.metadata.cleansedId ?? "—"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-400">Source</dt>
-              <dd className="text-sm font-semibold text-slate-900">{sourceLabel}</dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-400">Source identifier</dt>
-              <dd className="text-sm font-semibold text-slate-900 break-all">
-                {sourceIdentifier}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-400">Locale</dt>
-              <dd className="text-sm font-semibold text-slate-900">
-                {context.metadata.locale ?? "—"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-400">Page ID</dt>
-              <dd className="text-sm font-semibold text-slate-900">
-                {context.metadata.pageId ?? "—"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-400">Cache status</dt>
-              <dd className="text-sm font-semibold text-slate-900">
-                {context.fallbackReason === "quota" ? "Partial snapshot" : "Complete snapshot"}
-              </dd>
-            </div>
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-wide text-slate-400">Items</p>
-              <h2 className="text-lg font-semibold text-slate-900">
-                Original vs Cleansed values
-              </h2>
-            </div>
-          </div>
-
-          {itemsLoading ? (
-            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 py-10 text-center text-sm text-slate-600">
-              Fetching latest cleansed rows…
-            </div>
-          ) : itemsError ? (
-            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              <p className="font-semibold">Unable to load cleansed items.</p>
-              <p className="mt-1">{itemsError}</p>
-              <button
-                type="button"
-                onClick={() => context.metadata.cleansedId && fetchItems(context.metadata.cleansedId)}
-                className="mt-3 rounded-full bg-amber-600 px-3 py-1 text-xs font-semibold text-white"
-              >
-                Retry fetch
-              </button>
-            </div>
-          ) : items.length === 0 ? (
-            <div className="mt-4 rounded-2xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-500">
-              No cleansed items available yet.
-            </div>
-          ) : (
-            <div className="mt-4 rounded-2xl border border-slate-100">
-              <div className="max-h-[480px] overflow-y-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                  <tr>
-                    <th className="px-4 py-3 font-semibold">Field</th>
-                    <th className="px-4 py-3 font-semibold">Original value</th>
-                    <th className="px-4 py-3 font-semibold">Cleansed value</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
-                  {items.map((row, index) => (
-                    <tr key={row.id ?? `${row.field ?? "row"}-${index}`}>
-                      <td className="px-4 py-3 align-top font-semibold text-slate-900">
-                        {row.field}
-                      </td>
-                      <td className="px-4 py-3 align-top text-slate-700">
-                        <pre className="whitespace-pre-wrap text-xs">
-                          {row.original ?? "—"}
-                        </pre>
-                      </td>
-                      <td className="px-4 py-3 align-top text-slate-700">
-                        <pre className="whitespace-pre-wrap text-xs">
-                          {row.cleansed ?? "—"}
-                        </pre>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+      <main className="mx-auto flex max-w-[1600px] flex-col gap-6 px-8 py-8">
+        <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+          {/* Left Pane: Items Table */}
+          <section className="flex flex-col rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400">
+                  Cleansed Items
+                </h3>
+                <p className="mt-1 text-xs font-medium text-slate-500">
+                  {items.length} fields processed
+                </p>
               </div>
             </div>
-          )}
-        </section>
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-3">
-            <div>
-              <p className="text-xs uppercase tracking-wide text-slate-400">Applied rules</p>
-              <h2 className="text-lg font-semibold text-slate-900">
-                Cleansing heuristics snapshot
-              </h2>
-            </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              {RULES.map((rule) => (
-                <div
-                  key={rule.title}
-                  className="rounded-2xl border border-slate-100 bg-slate-50 p-4 shadow-inner"
-                >
-                  <p className="text-sm font-semibold text-slate-900">{rule.title}</p>
-                  <p className="mt-1 text-xs text-slate-600">{rule.description}</p>
+            <div className="flex-1 overflow-auto scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
+              {itemsLoading ? (
+                <div className="py-20 text-center">
+                  <span className="inline-flex size-6 animate-spin rounded-full border-2 border-slate-200 border-t-black" />
+                  <p className="mt-4 text-sm font-medium text-slate-500">Loading cleansed data...</p>
                 </div>
-              ))}
+              ) : itemsError ? (
+                <div className="p-10 text-center">
+                  <p className="text-sm font-semibold text-slate-900">{itemsError}</p>
+                  <button
+                    type="button"
+                    onClick={() => context.metadata.cleansedId && fetchItems(context.metadata.cleansedId)}
+                    className="mt-4 rounded-xl bg-black px-6 py-2 text-xs font-bold text-white uppercase tracking-widest"
+                  >
+                    Retry fetch
+                  </button>
+                </div>
+              ) : items.length === 0 ? (
+                <div className="py-20 text-center opacity-40">
+                  <p className="text-sm font-medium text-slate-500">No items available.</p>
+                </div>
+              ) : (
+                <table className="w-full text-left text-sm">
+                  <thead className="sticky top-0 bg-slate-50 text-[10px] font-bold uppercase tracking-widest text-slate-400 z-10">
+                    <tr>
+                      <th className="px-6 py-4">Field</th>
+                      <th className="px-6 py-4">Original</th>
+                      <th className="px-6 py-4">Cleansed</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {items.map((row, index) => (
+                      <tr key={row.id ?? `${row.field ?? "row"}-${index}`} className="group hover:bg-slate-50/50 transition-colors">
+                        <td className="px-6 py-4 align-top font-bold text-black min-w-[140px]">
+                          {row.field}
+                        </td>
+                        <td className="px-6 py-4 align-top">
+                          <div className="max-h-32 overflow-y-auto text-xs text-slate-400 leading-relaxed scrollbar-thin">
+                            {row.original ?? "—"}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 align-top">
+                          <div className="max-h-32 overflow-y-auto text-xs text-slate-900 font-medium leading-relaxed scrollbar-thin">
+                            {row.cleansed ?? "—"}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
-          </div>
-        </section>
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-wide text-slate-400">Next steps</p>
-              <h2 className="text-lg font-semibold text-slate-900">
-                Ready to send for enrichment?
-              </h2>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => router.push("/extraction")}
-                className="rounded-full border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700"
-              >
-                Back to Extraction
-              </button>
+            <div className="p-6 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => router.push("/extraction")}
+                  className="rounded-xl border border-slate-200 bg-white px-6 py-3 text-xs font-bold uppercase tracking-widest text-slate-500 hover:border-black hover:text-black transition-all"
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearCleansedContext();
+                    router.push("/ingestion");
+                  }}
+                  className="rounded-xl border border-slate-200 bg-white px-6 py-3 text-xs font-bold uppercase tracking-widest text-slate-500 hover:border-black hover:text-black transition-all"
+                >
+                  Reset
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={handleSendToEnrichment}
                 disabled={enrichmentFeedback.state === "loading"}
-                className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-70"
+                className="rounded-xl bg-black px-10 py-3 text-xs font-bold uppercase tracking-widest text-white shadow-lg shadow-black/20 transition-all hover:bg-slate-800"
               >
-                {enrichmentFeedback.state === "loading"
-                  ? "Sending to Enrichment…"
-                  : "Send to Enrichment"}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  clearCleansedContext();
-                  router.push("/ingestion");
-                }}
-                className="rounded-full border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700">
-                Start Over
+                {enrichmentFeedback.state === "loading" ? "Processing..." : "Send to Enrichment"}
               </button>
             </div>
-          </div>
-        </section>
+          </section>
+
+          {/* Right Pane: Metadata & Rules */}
+          <aside className="space-y-6">
+            <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h3 className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-6">
+                File Metadata
+              </h3>
+              <div className="space-y-6">
+                {[
+                  { label: "Status", value: context.status ?? "CLEANSED" },
+                  { label: "Locale", value: context.metadata.locale ?? "—" },
+                  { label: "Page ID", value: context.metadata.pageId ?? "—" },
+                  { label: "Source", value: sourceLabel },
+                  { label: "Cleansed ID", value: context.metadata.cleansedId ?? "—" },
+                ].map((item) => (
+                  <div key={item.label}>
+                    <dt className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                      {item.label}
+                    </dt>
+                    <dd className="mt-1 text-sm font-bold text-black break-all">{item.value}</dd>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h3 className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-4">
+                Applied Heuristics
+              </h3>
+              <div className="space-y-4">
+                {RULES.map((rule) => (
+                  <div key={rule.title} className="group">
+                    <p className="text-xs font-bold text-black group-hover:text-slate-500 transition-colors">
+                      {rule.title}
+                    </p>
+                    <p className="mt-1 text-[10px] text-slate-400 leading-normal">
+                      {rule.description}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </aside>
+        </div>
       </main>
     </PipelineShell>
   );

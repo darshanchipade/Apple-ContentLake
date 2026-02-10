@@ -1,0 +1,260 @@
+package com.apple.springboot.service;
+
+import com.apple.springboot.model.CleansedItemDetail;
+import com.apple.springboot.model.CleansedDataStore;
+import com.apple.springboot.model.EnrichedContentElement;
+import com.apple.springboot.model.EnrichedContentRevision;
+import com.apple.springboot.repository.EnrichedContentElementRepository;
+import com.apple.springboot.repository.EnrichedContentRevisionRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.OffsetDateTime;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+
+@Service
+public class EnrichmentPersistenceService {
+
+    private static final Logger logger = LoggerFactory.getLogger(EnrichmentPersistenceService.class);
+    private static final String SOURCE_AI = "AI";
+
+    private final EnrichedContentElementRepository enrichedContentElementRepository;
+    private final EnrichedContentRevisionRepository revisionRepository;
+    private final ObjectMapper objectMapper;
+    private final EntityManager entityManager;
+    private final ContentHashingService contentHashingService;
+
+    /**
+     * Creates the persistence service used during enrichment processing.
+     */
+    public EnrichmentPersistenceService(EnrichedContentElementRepository enrichedContentElementRepository,
+                                        EnrichedContentRevisionRepository revisionRepository,
+                                        ObjectMapper objectMapper,
+                                        EntityManager entityManager,
+                                        ContentHashingService contentHashingService) {
+        this.enrichedContentElementRepository = enrichedContentElementRepository;
+        this.revisionRepository = revisionRepository;
+        this.objectMapper = objectMapper;
+        this.entityManager = entityManager;
+        this.contentHashingService = contentHashingService;
+    }
+
+    /**
+     * Persists a successfully enriched element and records an AI revision.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void saveEnrichedElement(CleansedItemDetail itemDetail, CleansedDataStore parentEntry,
+                                    Map<String, Object> bedrockResponse, String elementStatus) throws JsonProcessingException {
+
+        // Find existing element or create a new one to prevent duplicates.
+        Optional<EnrichedContentElement> existingElementOpt = enrichedContentElementRepository.findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(
+                parentEntry.getId(), itemDetail.sourcePath, itemDetail.originalFieldName);
+
+        EnrichedContentElement enrichedElement = existingElementOpt.orElse(new EnrichedContentElement());
+
+        if (enrichedElement.getId() == null) { // It's a new entity
+            enrichedElement.setCleansedDataId(parentEntry.getId());
+            enrichedElement.setVersion(parentEntry.getVersion());
+            enrichedElement.setSourceUri(parentEntry.getSourceUri());
+            enrichedElement.setItemSourcePath(itemDetail.sourcePath);
+            enrichedElement.setItemOriginalFieldName(itemDetail.originalFieldName);
+            enrichedElement.setItemModelHint(itemDetail.model);
+        }
+
+        enrichedElement.setCleansedText(itemDetail.cleansedContent);
+        enrichedElement.setContentHash(contentHashingService.hash(itemDetail.cleansedContent));
+        OffsetDateTime enrichedAt = OffsetDateTime.now();
+        enrichedElement.setEnrichedAt(enrichedAt);
+        enrichedElement.setContext(objectMapper.convertValue(itemDetail.context, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> standardEnrichments = (Map<String, Object>) bedrockResponse.getOrDefault("standardEnrichments", bedrockResponse);
+
+        String summary = (String) standardEnrichments.get("summary");
+        String sentiment = (String) standardEnrichments.get("sentiment");
+        String classification = (String) standardEnrichments.get("classification");
+        @SuppressWarnings("unchecked")
+        List<String> keywords = (List<String>) standardEnrichments.get("keywords");
+        @SuppressWarnings("unchecked")
+        List<String> tags = (List<String>) standardEnrichments.get("tags");
+        String modelUsed = (String) bedrockResponse.get("enrichedWithModel");
+
+        boolean userOverrideActive = Boolean.TRUE.equals(enrichedElement.getUserOverrideActive());
+        if (!userOverrideActive) {
+            enrichedElement.setSummary(summary);
+            enrichedElement.setClassification(classification);
+            enrichedElement.setKeywords(keywords);
+            enrichedElement.setTags(tags);
+            enrichedElement.setBedrockModelUsed(modelUsed);
+            enrichedElement.setUserOverrideActive(false);
+            enrichedElement.setNewAiAvailable(false);
+        } else {
+            enrichedElement.setNewAiAvailable(true);
+        }
+        enrichedElement.setSentiment(sentiment);
+        enrichedElement.setStatus(elementStatus);
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("enrichedWithModel", modelUsed);
+        metadata.put("enrichmentTimestamp", enrichedAt.toString());
+        try {
+            enrichedElement.setEnrichmentMetadata(objectMapper.writeValueAsString(metadata));
+        } catch (JsonProcessingException e) {
+            logger.warn("Could not serialize enrichment metadata for item path: {}", itemDetail.sourcePath, e);
+            enrichedElement.setEnrichmentMetadata("{\"error\":\"Could not serialize metadata\"}");
+        }
+
+        enrichedContentElementRepository.save(enrichedElement);
+        entityManager.flush();
+        recordAiRevision(enrichedElement, summary, classification, keywords, tags, modelUsed, !userOverrideActive, enrichedAt);
+        logRowCount(parentEntry.getId(), "saveEnrichedElement");
+        logger.info("Persisted {} status for CleansedDataStore ID {}", elementStatus, parentEntry.getId());
+    }
+
+    /**
+     * Persists an enrichment element when an error occurred.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void saveErrorEnrichedElement(CleansedItemDetail itemDetail, CleansedDataStore parentEntry, String status, String errorMessage) {
+
+        Optional<EnrichedContentElement> existingElementOpt = enrichedContentElementRepository.findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(
+                parentEntry.getId(), itemDetail.sourcePath, itemDetail.originalFieldName);
+
+        EnrichedContentElement errorElement = existingElementOpt.orElse(new EnrichedContentElement());
+
+        if (errorElement.getId() == null) { // It's a new entity
+            errorElement.setCleansedDataId(parentEntry.getId());
+            errorElement.setVersion(parentEntry.getVersion());
+            errorElement.setSourceUri(parentEntry.getSourceUri());
+            errorElement.setItemSourcePath(itemDetail.sourcePath);
+            errorElement.setItemOriginalFieldName(itemDetail.originalFieldName);
+            errorElement.setItemModelHint(itemDetail.model);
+        }
+
+        errorElement.setCleansedText(itemDetail.cleansedContent);
+        errorElement.setContentHash(contentHashingService.hash(itemDetail.cleansedContent));
+        errorElement.setEnrichedAt(OffsetDateTime.now());
+        errorElement.setStatus(status);
+        errorElement.setContext(objectMapper.convertValue(itemDetail.context, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}));
+
+        Map<String, Object> bedrockMeta = new HashMap<>();
+        bedrockMeta.put("enrichmentError", errorMessage);
+        try {
+            errorElement.setEnrichmentMetadata(objectMapper.writeValueAsString(bedrockMeta));
+        } catch (JsonProcessingException e) {
+            errorElement.setEnrichmentMetadata("{\"error\":\"Could not serialize error metadata\"}");
+        }
+
+        enrichedContentElementRepository.save(errorElement);
+        entityManager.flush();
+        logRowCount(parentEntry.getId(), "saveErrorEnrichedElement");
+        logger.debug("Saved error element for item path: {}", itemDetail.sourcePath);
+    }
+
+    /**
+     * Persists an element that was skipped from enrichment.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void saveSkippedEnrichedElement(CleansedItemDetail itemDetail, CleansedDataStore parentEntry, String status) {
+
+        Optional<EnrichedContentElement> existingElementOpt = enrichedContentElementRepository.findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(
+                parentEntry.getId(), itemDetail.sourcePath, itemDetail.originalFieldName);
+
+        EnrichedContentElement skippedElement = existingElementOpt.orElse(new EnrichedContentElement());
+
+        if (skippedElement.getId() == null) {
+            skippedElement.setCleansedDataId(parentEntry.getId());
+            skippedElement.setVersion(parentEntry.getVersion());
+            skippedElement.setSourceUri(parentEntry.getSourceUri());
+            skippedElement.setItemSourcePath(itemDetail.sourcePath);
+            skippedElement.setItemOriginalFieldName(itemDetail.originalFieldName);
+            skippedElement.setItemModelHint(itemDetail.model);
+        }
+
+        skippedElement.setCleansedText(itemDetail.cleansedContent);
+        skippedElement.setContentHash(contentHashingService.hash(itemDetail.cleansedContent));
+        skippedElement.setEnrichedAt(OffsetDateTime.now());
+        skippedElement.setStatus(status);
+        skippedElement.setContext(objectMapper.convertValue(itemDetail.context, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}));
+
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("enrichmentSkipped", true);
+        metadata.put("reason", "Excluded via configuration");
+        metadata.put("timestamp", skippedElement.getEnrichedAt().toString());
+        try {
+            skippedElement.setEnrichmentMetadata(objectMapper.writeValueAsString(metadata));
+        } catch (JsonProcessingException e) {
+            skippedElement.setEnrichmentMetadata("{\"enrichmentSkipped\":true}");
+        }
+
+        enrichedContentElementRepository.save(skippedElement);
+        entityManager.flush();
+        logRowCount(parentEntry.getId(), "saveSkippedEnrichedElement");
+        logger.debug("Saved skipped enrichment element for item path: {}", itemDetail.sourcePath);
+    }
+
+    /**
+     * Records an AI revision entry for a processed element.
+     */
+    private void recordAiRevision(EnrichedContentElement element,
+                                  String summary,
+                                  String classification,
+                                  List<String> keywords,
+                                  List<String> tags,
+                                  String modelUsed,
+                                  boolean applied,
+                                  OffsetDateTime enrichedAt) {
+        if (element.getId() == null) {
+            return;
+        }
+        Integer maxRevision = revisionRepository.findMaxRevisionForElement(element.getId());
+        int nextRevision = Optional.ofNullable(maxRevision).orElse(0) + 1;
+
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("pipeline", true);
+        metadata.put("applied", applied);
+        metadata.put("modelUsed", modelUsed);
+        metadata.put("enrichedAt", enrichedAt != null ? enrichedAt.toString() : null);
+        if (!applied) {
+            metadata.put("blockedBy", "USER_OVERRIDE");
+        }
+
+        EnrichedContentRevision revision = EnrichedContentRevision.builder()
+                .enrichedContentElementId(element.getId())
+                .cleansedDataId(element.getCleansedDataId())
+                .revision(nextRevision)
+                .summary(summary)
+                .classification(classification)
+                .keywords(keywords)
+                .tags(tags)
+                .source(SOURCE_AI)
+                .modelUsed(modelUsed)
+                .metadata(metadata)
+                .createdAt(OffsetDateTime.now())
+                .build();
+        revisionRepository.save(revision);
+    }
+
+    /**
+     * Logs the current row count for a cleansed data record.
+     */
+    private void logRowCount(UUID cleansedDataId, String context) {
+        if (cleansedDataId == null) {
+            return;
+        }
+        Long count = entityManager.createQuery(
+                        "select count(e.id) from EnrichedContentElement e where e.cleansedDataId = :id", Long.class)
+                .setParameter("id", cleansedDataId)
+                .getSingleResult();
+        logger.info("EnrichedContentElements persisted for {} after {}: {}", cleansedDataId, context, count);
+    }
+}

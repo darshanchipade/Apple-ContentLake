@@ -1,0 +1,110 @@
+package com.apple.springboot.model;
+
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import io.swagger.v3.oas.annotations.media.Schema;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+@Schema(description = "Chatbot search result containing matched content and metadata")
+@JsonInclude(JsonInclude.Include.NON_NULL)
+public class ChatbotResultDto {
+    @JsonProperty("section")
+    @Schema(description = "Section identifier", example = "video-section-header")
+    private String section; // e.g., "video-section-header"
+
+    @JsonProperty("cf_id")
+    @Schema(description = "Content fragment ID", example = "cf1")
+    private String cfId; // e.g., "cf1", assigned sequentially
+
+    @JsonIgnore
+    private String sectionPath;
+
+    @JsonIgnore
+    private String sectionUri;
+
+    @JsonProperty("cleansed_text")
+    @Schema(description = "Cleansed text content of the matched section", example = "Learn how to set up your iPad")
+    private String cleansedText;
+
+    @JsonProperty("page_id")
+    private String pageId; // derived from path/locale segment (e.g., ipad)
+
+    @JsonProperty("tenant")
+    private String tenant; // derived from path (e.g., applecom-cms)
+
+    @JsonIgnore
+    private String locale; // e.g., en_US
+
+    @JsonIgnore
+    private String country;
+
+    @JsonIgnore
+    private String language;
+
+    /**
+     * Legacy constructor retained for compatibility with older mappers.
+     */
+    public <T> ChatbotResultDto(String originalFieldName, String s, String sectionPath, String sectionUri, String chunkText, String source, String originalFieldName1, int rank, double distance, String string, String lastModified, List<T> ts) {
+    }
+
+    // Also expose a "text" alias for clients that expect it
+    /**
+     * Returns the cleansed text under a legacy "text" alias.
+     */
+    @JsonProperty("text")
+    public String getText() { return cleansedText; }
+
+    @JsonIgnore
+    private String source; // "consolidated_enriched_sections" or "content_chunks"
+
+    @JsonIgnore
+    private String contentRole; // maps from original_field_name
+
+    // Optionals removed per requirements simplification
+
+    @JsonProperty("last_modified")
+    private String lastModified; // ISO timestamp if available
+
+    @JsonProperty("match_terms")
+    private java.util.List<String> matchTerms;
+
+    @JsonProperty("context")
+    private Map<String, Object> context;
+
+    /**
+     * Sets the context, trimming to key portions used by clients.
+     */
+    public void setContext(Map<String, Object> context) {
+        this.context = slimContext(context);
+    }
+
+    /**
+     * Filters the context to a minimal set of keys.
+     */
+    private Map<String, Object> slimContext(Map<String, Object> context) {
+        if (context == null) {
+            return null;
+        }
+        Map<String, Object> slim = new LinkedHashMap<>();
+        Object facets = context.get("facets");
+        if (facets != null) {
+            slim.put("facets", facets);
+        }
+        Object envelope = context.get("envelope");
+        if (envelope != null) {
+            slim.put("envelope", envelope);
+        }
+        return slim.isEmpty() ? null : slim;
+    }
+
+}

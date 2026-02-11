@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { PipelineShell } from "@/components/PipelineShell";
 import { StageHero } from "@/components/StageHero";
+import clsx from "clsx";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -31,26 +32,29 @@ function MessageBubble({ role, content }: ChatMessage) {
   return (
     <div className={`flex w-full ${isUser ? "justify-end" : "justify-start"}`}>
       <div
-        className={`${isUser ? "bg-blue-600 text-white" : "bg-white text-[#111215]"} max-w-[80%] rounded-2xl px-4 py-3 shadow`}
+        className={clsx(
+          "max-w-[90%] sm:max-w-[80%] rounded-2xl px-4 py-3 shadow-sm",
+          isUser ? "bg-black text-white" : "bg-white text-[#111215] border border-slate-100"
+        )}
       >
         {isJson ? (
           <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between text-xs text-slate-500">
+            <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-slate-400">
               <span>JSON response</span>
               <button
                 type="button"
                 onClick={() => downloadJson(content)}
-                className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+                className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-bold text-slate-700 transition hover:bg-slate-100"
               >
-                Download JSON
+                Download
               </button>
             </div>
-            <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-sm">
+            <pre className="max-h-60 sm:max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] sm:text-xs text-slate-600 bg-slate-50 p-2 rounded-lg">
               {JSON.stringify(content, null, 2)}
             </pre>
           </div>
         ) : (
-          <div className="whitespace-pre-wrap break-words text-sm">{content}</div>
+          <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">{content}</div>
         )}
       </div>
     </div>
@@ -123,39 +127,51 @@ export default function ChatbotPage() {
         description="Ask natural-language questions about your content. Responses stream from the Spring Boot ChatBotController."
       />
 
-      <main className="mx-auto w-full max-w-4xl px-6 py-10">
-        <div className="flex flex-col gap-4 rounded-[16px] bg-[#f9f9f9] px-4 py-6 md:px-8">
-          <div className="flex items-center justify-between">
-            <h2 className="text-2xl font-semibold text-[#111215]">Chatbot</h2>
-            <a href="/search" className="text-sm font-semibold text-[#2180f9] hover:underline">
+      <main className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6 sm:py-10">
+        <div className="flex flex-col gap-4 rounded-3xl border border-slate-200 bg-white px-4 py-6 shadow-sm md:px-8">
+          <div className="flex items-center justify-between border-b border-slate-50 pb-4">
+            <div>
+              <h2 className="text-xl font-bold text-black">Assistant</h2>
+              <p className="text-xs font-medium text-slate-400">Powered by Spring Boot ChatBot</p>
+            </div>
+            <a href="/search" className="text-xs font-bold uppercase tracking-widest text-slate-400 hover:text-black transition-colors">
               Back to Search
             </a>
           </div>
 
           <div
             ref={containerRef}
-            className="flex h-[60vh] flex-col gap-3 overflow-auto rounded-xl bg-gray-100 p-4"
+            className="flex h-[50vh] sm:h-[60vh] flex-col gap-4 overflow-auto rounded-2xl bg-slate-50/50 p-4 scrollbar-thin scrollbar-thumb-slate-200"
           >
             {messages.map((message, index) => (
               <MessageBubble key={`${message.role}-${index}`} role={message.role} content={message.content} />
             ))}
-            {isLoading && <div className="text-center text-sm text-gray-500">Thinking…</div>}
+            {isLoading && (
+              <div className="flex items-center gap-2 self-start rounded-2xl bg-white px-4 py-3 text-sm text-slate-400 shadow-sm border border-slate-100">
+                <span className="flex gap-1">
+                  <span className="size-1.5 animate-bounce rounded-full bg-slate-300" style={{ animationDelay: '0ms' }} />
+                  <span className="size-1.5 animate-bounce rounded-full bg-slate-300" style={{ animationDelay: '150ms' }} />
+                  <span className="size-1.5 animate-bounce rounded-full bg-slate-300" style={{ animationDelay: '300ms' }} />
+                </span>
+                Thinking…
+              </div>
+            )}
           </div>
 
-          <div className="flex items-end gap-2 rounded-xl bg-white p-2 shadow">
+          <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white p-2 focus-within:border-black transition-colors shadow-sm">
             <textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={onKeyDown}
               rows={2}
               placeholder="Type a message..."
-              className="flex-1 resize-none border-0 p-2 text-sm outline-none"
+              className="flex-1 resize-none border-0 p-3 text-sm outline-none placeholder:text-slate-400"
             />
             <button
               type="button"
               onClick={() => void send()}
-              disabled={isLoading}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+              disabled={isLoading || !input.trim()}
+              className="rounded-xl bg-black px-5 py-3 text-xs font-bold uppercase tracking-widest text-white transition hover:bg-slate-800 disabled:opacity-20 shadow-lg shadow-black/10"
             >
               Send
             </button>

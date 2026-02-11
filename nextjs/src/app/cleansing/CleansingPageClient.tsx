@@ -458,22 +458,22 @@ export default function CleansingPageClient() {
         actionsSlot={<FeedbackPill feedback={enrichmentFeedback} />}
       />
 
-      <main className="mx-auto flex max-w-[1600px] flex-col gap-6 px-8 py-8">
+      <main className="mx-auto flex max-w-[1600px] flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
         <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
           {/* Left Pane: Items Table */}
-          <section className="flex flex-col rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+          <section className="flex flex-col rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden max-h-[600px] lg:max-h-[800px]">
+            <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between">
               <div>
-                <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400">
+                <h3 className="text-[10px] sm:text-sm font-bold uppercase tracking-widest text-slate-400">
                   Cleansed Items
                 </h3>
-                <p className="mt-1 text-xs font-medium text-slate-500">
+                <p className="mt-1 text-[10px] sm:text-xs font-medium text-slate-500">
                   {items.length} fields processed
                 </p>
               </div>
             </div>
 
-            <div className="flex-1 overflow-auto scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
+            <div className="flex-1 overflow-auto scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent min-h-[300px]">
               {itemsLoading ? (
                 <div className="py-20 text-center">
                   <span className="inline-flex size-6 animate-spin rounded-full border-2 border-slate-200 border-t-black" />
@@ -496,26 +496,26 @@ export default function CleansingPageClient() {
                 </div>
               ) : (
                 <table className="w-full text-left text-sm">
-                  <thead className="sticky top-0 bg-slate-50 text-[10px] font-bold uppercase tracking-widest text-slate-400 z-10">
+                  <thead className="sticky top-0 bg-slate-50 text-[9px] sm:text-[10px] font-bold uppercase tracking-widest text-slate-400 z-10">
                     <tr>
-                      <th className="px-6 py-4">Field</th>
-                      <th className="px-6 py-4">Original</th>
-                      <th className="px-6 py-4">Cleansed</th>
+                      <th className="px-4 py-3 sm:px-6 sm:py-4">Field</th>
+                      <th className="px-4 py-3 sm:px-6 sm:py-4">Original</th>
+                      <th className="px-4 py-3 sm:px-6 sm:py-4">Cleansed</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
                     {items.map((row, index) => (
                       <tr key={row.id ?? `${row.field ?? "row"}-${index}`} className="group hover:bg-slate-50/50 transition-colors">
-                        <td className="px-6 py-4 align-top font-bold text-black min-w-[140px]">
-                          {row.field}
+                        <td className="px-4 py-3 sm:px-6 sm:py-4 align-top font-bold text-black min-w-[100px] sm:min-w-[140px]">
+                          <span className="break-words">{row.field}</span>
                         </td>
-                        <td className="px-6 py-4 align-top">
-                          <div className="max-h-32 overflow-y-auto text-xs text-slate-400 leading-relaxed scrollbar-thin">
+                        <td className="px-4 py-3 sm:px-6 sm:py-4 align-top">
+                          <div className="max-h-24 sm:max-h-32 overflow-y-auto text-[11px] sm:text-xs text-slate-400 leading-relaxed scrollbar-thin">
                             {row.original ?? "—"}
                           </div>
                         </td>
-                        <td className="px-6 py-4 align-top">
-                          <div className="max-h-32 overflow-y-auto text-xs text-slate-900 font-medium leading-relaxed scrollbar-thin">
+                        <td className="px-4 py-3 sm:px-6 sm:py-4 align-top">
+                          <div className="max-h-24 sm:max-h-32 overflow-y-auto text-[11px] sm:text-xs text-slate-900 font-medium leading-relaxed scrollbar-thin">
                             {row.cleansed ?? "—"}
                           </div>
                         </td>
@@ -526,12 +526,12 @@ export default function CleansingPageClient() {
               )}
             </div>
 
-            <div className="p-6 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
-              <div className="flex gap-3">
+            <div className="p-4 sm:p-6 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="flex gap-2 sm:gap-3 w-full sm:w-auto">
                 <button
                   type="button"
                   onClick={() => router.push("/extraction")}
-                  className="rounded-xl border border-slate-200 bg-white px-6 py-3 text-xs font-bold uppercase tracking-widest text-slate-500 hover:border-black hover:text-black transition-all"
+                  className="flex-1 sm:flex-none rounded-xl border border-slate-200 bg-white px-4 sm:px-6 py-3 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-slate-500 hover:border-black hover:text-black transition-all"
                 >
                   Back
                 </button>
@@ -541,7 +541,7 @@ export default function CleansingPageClient() {
                     clearCleansedContext();
                     router.push("/ingestion");
                   }}
-                  className="rounded-xl border border-slate-200 bg-white px-6 py-3 text-xs font-bold uppercase tracking-widest text-slate-500 hover:border-black hover:text-black transition-all"
+                  className="flex-1 sm:flex-none rounded-xl border border-slate-200 bg-white px-4 sm:px-6 py-3 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-slate-500 hover:border-black hover:text-black transition-all"
                 >
                   Reset
                 </button>
@@ -550,7 +550,7 @@ export default function CleansingPageClient() {
                 type="button"
                 onClick={handleSendToEnrichment}
                 disabled={enrichmentFeedback.state === "loading"}
-                className="rounded-xl bg-black px-10 py-3 text-xs font-bold uppercase tracking-widest text-white shadow-lg shadow-black/20 transition-all hover:bg-slate-800"
+                className="w-full sm:w-auto rounded-xl bg-black px-6 sm:px-10 py-3 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-white shadow-lg shadow-black/20 transition-all hover:bg-slate-800"
               >
                 {enrichmentFeedback.state === "loading" ? "Processing..." : "Send to Enrichment"}
               </button>

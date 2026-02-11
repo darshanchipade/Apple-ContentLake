@@ -574,10 +574,10 @@ export default function ExtractionPage() {
         actionsSlot={<FeedbackPill feedback={feedback} />}
       />
 
-      <main className="mx-auto flex max-w-[1600px] flex-col gap-6 px-8 py-8">
-        <div className="grid h-[calc(100vh-20rem)] min-h-[600px] gap-6 lg:grid-cols-[320px_1fr_320px]">
+      <main className="mx-auto flex max-w-[1600px] flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+        <div className="grid h-auto lg:h-[calc(100vh-20rem)] lg:min-h-[600px] gap-6 lg:grid-cols-[320px_1fr_320px]">
           {/* Left Pane: File Structure */}
-          <section className="flex flex-col rounded-3xl border border-slate-200 bg-white p-6 shadow-sm overflow-hidden">
+          <section className="flex flex-col rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm overflow-hidden max-h-[400px] lg:max-h-none">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400">
                 File Structure
@@ -612,8 +612,8 @@ export default function ExtractionPage() {
           </section>
 
           {/* Center Pane: Data Preview */}
-          <section className="flex flex-col rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            <div className="flex items-center justify-between border-b border-slate-100 p-6">
+          <section className="flex flex-col rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden min-h-[400px]">
+            <div className="flex items-center justify-between border-b border-slate-100 p-4 sm:p-6">
               <div className="flex items-center gap-4">
                 <div className="flex size-10 items-center justify-center rounded-xl bg-slate-50 text-black">
                   <Square2StackIcon className="size-5" />
@@ -740,7 +740,7 @@ export default function ExtractionPage() {
           </section>
 
           {/* Right Pane: File Metadata */}
-          <section className="flex flex-col rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <section className="flex flex-col rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm">
             <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-6">
               File Metadata
             </h3>

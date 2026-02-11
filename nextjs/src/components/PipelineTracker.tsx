@@ -52,14 +52,14 @@ export function PipelineTracker({ current }: { current: StepId }) {
   return (
     <nav className="w-full text-xs">
       <div className="rounded-[28px] border border-slate-200 bg-white px-6 py-5 shadow-[0_20px_50px_rgba(15,23,42,0.08)]">
-        <div className="flex flex-col gap-6">
-          <div className="flex items-center justify-between text-[0.65rem] font-semibold uppercase tracking-[0.3em] text-slate-400">
+        <div className="flex flex-col gap-4 sm:gap-6">
+          <div className="flex items-center justify-between text-[9px] sm:text-[0.65rem] font-semibold uppercase tracking-[0.3em] text-slate-400">
             <span>Pipeline</span>
             <span>
               Step {Math.min(currentIndex + 1, STEPS.length)} of {STEPS.length}
             </span>
           </div>
-          <div className="flex flex-col gap-6 md:flex-row md:items-center">
+          <div className="flex flex-row items-start justify-between gap-1 sm:gap-6 md:items-center">
             {STEPS.map((step, index) => {
               const status =
                 index < currentIndex
@@ -75,20 +75,20 @@ export function PipelineTracker({ current }: { current: StepId }) {
                 <div
                   key={step.id}
                   className={clsx(
-                    "flex items-center gap-4 md:flex-1",
+                    "flex flex-col items-center md:flex-row md:flex-1 md:gap-4",
                     index === STEPS.length - 1 && "md:flex-initial",
                   )}
                 >
-                  <div className="flex flex-col items-center gap-3 text-center">
+                  <div className="flex flex-col items-center gap-2 text-center sm:gap-3">
                     <div
                       className={clsx(
-                        "flex size-14 items-center justify-center rounded-full border-2 transition-transform duration-200",
+                        "flex size-9 sm:size-12 lg:size-14 items-center justify-center rounded-full border-2 transition-transform duration-200",
                         styles.circle,
                       )}
                     >
-                      <Icon className="size-5" />
+                      <Icon className="size-4 sm:size-5" />
                     </div>
-                    <span className={clsx("text-[0.7rem] font-semibold", styles.label)}>
+                    <span className={clsx("text-[8px] sm:text-[0.7rem] font-bold sm:font-semibold leading-tight", styles.label)}>
                       {step.label}
                     </span>
                   </div>

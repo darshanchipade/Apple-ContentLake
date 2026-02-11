@@ -1847,14 +1847,14 @@ const normalized = source.trim().toUpperCase();
                                          {element.copy ?? "No enriched copy provided yet."}
                                        </p>
                                      </div>
-                                     <div className="grid gap-4 lg:grid-cols-3">
-                                       <div className="rounded-xl border border-slate-100 bg-white p-4">
+                                     <div className="grid gap-4 grid-cols-1 lg:grid-cols-3">
+                                       <div className="rounded-xl border border-slate-100 bg-white p-4 overflow-hidden">
                                          <div className="flex flex-wrap items-start justify-between gap-3">
                                            <div>
-                                             <p className="text-xs uppercase tracking-wide text-slate-400">
+                                             <p className="text-[10px] uppercase tracking-wide text-slate-400">
                                                Content insights
                                              </p>
-                                             <h3 className="text-base font-semibold text-slate-900">
+                                             <h3 className="text-base font-bold text-black">
                                                Summary
                                              </h3>
                                            </div>
@@ -2005,10 +2005,10 @@ const normalized = source.trim().toUpperCase();
                                            </p>
                                          )}
                                        </div>
-                                       <div className="rounded-xl border border-slate-100 bg-white p-4">
+                                       <div className="rounded-xl border border-slate-100 bg-white p-4 overflow-hidden">
                                          <div className="flex flex-wrap items-start justify-between gap-3">
                                            <div>
-                                             <p className="text-xs uppercase tracking-wide text-slate-400">
+                                             <p className="text-[10px] uppercase tracking-wide text-slate-400">
                                                Search metadata
                                              </p>
                                            </div>
@@ -2161,8 +2161,8 @@ const normalized = source.trim().toUpperCase();
                                            </p>
                                          )}
                                        </div>
-                                       <div className="rounded-xl border border-slate-100 bg-white p-4">
-                                         <p className="text-xs uppercase tracking-wide text-slate-400">
+                                       <div className="rounded-xl border border-slate-100 bg-white p-4 overflow-hidden">
+                                         <p className="text-[10px] uppercase tracking-wide text-slate-400">
                                            Tone & sentiment
                                          </p>
                                          <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
@@ -2185,7 +2185,7 @@ const normalized = source.trim().toUpperCase();
                                          </div>
                                        </div>
                                      </div>
-                                     <div className="rounded-xl border border-slate-100 bg-white p-4">
+                                     <div className="rounded-xl border border-slate-100 bg-white p-4 overflow-hidden">
                                        <div className="flex flex-wrap items-center justify-between gap-3">
                                          <div>
                                            <p className="text-xs uppercase tracking-wide text-slate-400">

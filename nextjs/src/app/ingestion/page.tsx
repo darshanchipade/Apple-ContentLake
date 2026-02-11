@@ -1047,8 +1047,8 @@ export default function IngestionPage() {
       />
 
       <main className="mx-auto grid max-w-6xl gap-6 px-6 py-10 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-        <section className="space-y-6">
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <section className="space-y-6 overflow-hidden">
+          <div className="rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm overflow-hidden">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <p className="text-xs uppercase tracking-wide text-slate-400">
@@ -1205,7 +1205,8 @@ export default function IngestionPage() {
               </div>
             </div>
 
-            <div className="mt-4 space-y-4">
+            <div className="mt-4 max-h-[400px] overflow-auto pr-2 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
+              <div className="space-y-4 min-w-[600px] sm:min-w-0">
               {uploads.length === 0 && (
                 <div className="rounded-2xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-500">
                   No uploads yet. Drop a JSON file to start the pipeline.
@@ -1275,6 +1276,7 @@ export default function IngestionPage() {
                   </div>
                 );
               })}
+              </div>
             </div>
           </div>
         </section>

@@ -222,9 +222,9 @@ export default function SearchPage() {
         description="Explore Content Lake with AI-powered refinements fed by the Spring Boot search controller."
       />
 
-      <main className="mx-auto max-w-5xl px-6 py-10">
-        <div className="rounded-[24px] border border-slate-200 bg-[#f9f9f9] px-6 py-12 shadow-sm md:px-16">
-          <div className="flex justify-end gap-4 text-sm font-semibold text-[#000000]">
+      <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-10">
+        <div className="rounded-3xl border border-slate-200 bg-white px-4 py-8 shadow-sm sm:px-10 lg:px-16 overflow-hidden">
+          <div className="flex justify-end gap-3 sm:gap-4 text-xs sm:text-sm font-semibold text-[#000000]">
             <a href="/ingestion" className="hover:underline">
               Upload JSON
             </a>

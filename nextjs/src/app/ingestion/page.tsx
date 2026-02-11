@@ -41,6 +41,7 @@ import {
   type UploadHistoryItem,
   type UploadStatus,
 } from "@/lib/upload-history";
+import { generateUUID } from "@/lib/uuid";
 
 type UploadTab = "local" | "api" | "s3";
 
@@ -274,7 +275,7 @@ export default function IngestionPage() {
     setLocalFile(file);
     setExtractFeedback({ state: "idle" });
 
-     const uploadId = crypto.randomUUID();
+     const uploadId = generateUUID();
      pendingLocalUploadIdRef.current = uploadId;
      setUploads((previous) => [
        {
@@ -362,7 +363,7 @@ export default function IngestionPage() {
       );
       return;
     }
-    const uploadId = crypto.randomUUID();
+    const uploadId = generateUUID();
     pendingApiUploadIdRef.current = uploadId;
     setUploads((previous) => [
       {
@@ -380,7 +381,7 @@ export default function IngestionPage() {
 
   const processLocalExtraction = async () => {
     const existingUploadId = pendingLocalUploadIdRef.current;
-    const uploadId = existingUploadId ?? crypto.randomUUID();
+    const uploadId = existingUploadId ?? generateUUID();
 
     if (!localFile) {
       setExtractFeedback({
@@ -546,7 +547,7 @@ export default function IngestionPage() {
 
     setApiFeedback({ state: "loading" });
     const existingUploadId = pendingApiUploadIdRef.current;
-    const uploadId = existingUploadId ?? crypto.randomUUID();
+    const uploadId = existingUploadId ?? generateUUID();
     if (!existingUploadId) {
       pendingApiUploadIdRef.current = uploadId;
       setUploads((previous) => [
@@ -694,7 +695,7 @@ export default function IngestionPage() {
     }
 
     setS3Feedback({ state: "loading" });
-    const uploadId = crypto.randomUUID();
+    const uploadId = generateUUID();
     setUploads((previous) => [
       {
         id: uploadId,

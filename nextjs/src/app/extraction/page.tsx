@@ -13,7 +13,6 @@ import {
   Square2StackIcon,
   TableCellsIcon,
 } from "@heroicons/react/24/outline";
-import { DocumentIcon as DocumentIconSolid } from "@heroicons/react/24/solid";
 import clsx from "clsx";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -66,7 +65,7 @@ const FeedbackPill = ({ feedback }: { feedback: Feedback }) => {
       ? "bg-slate-100 text-slate-900 border border-slate-200"
       : feedback.state === "error"
         ? "bg-slate-50 text-slate-500 border border-slate-200"
-        : "bg-slate-50 text-slate-600 border border-slate-200",
+        : "bg-slate-50 text-slate-600",
   );
   const Icon =
     feedback.state === "loading"
@@ -132,10 +131,6 @@ const extractItemsFromBackend = (payload: unknown): unknown[] => {
       payload.records,
       payload.data,
       payload.payload,
-      payload.cleansedItems,
-      payload.originalItems,
-      payload.result,
-      payload.body,
       payload.cleansedItems,
       payload.originalItems,
       payload.result,
@@ -667,19 +662,23 @@ export default function ExtractionPage() {
                     </thead>
                     <tbody className="divide-y divide-slate-100 bg-white">
                       {activeNode && (
-                        <tr>
+                        <tr className="bg-slate-50/30">
                           <td className="px-6 py-5 font-bold text-black">{activeNode.label}</td>
-                          <td className="px-6 py-5 text-slate-600">
+                          <td className="px-6 py-5 text-slate-600 italic">
                             {activeValue === undefined
                               ? "—"
                               : typeof activeValue === "object"
-                                ? JSON.stringify(activeValue)
+                                ? Array.isArray(activeValue)
+                                  ? `Array (${activeValue.length} items)`
+                                  : "Object"
                                 : String(activeValue)}
                           </td>
                         </tr>
                       )}
                       {activeNode?.children?.map((child) => {
-                        const childValue = parsedJson ? getValueAtPath(parsedJson, child.path.replace(/^[^\.]+\.?/, "")) : undefined;
+                        const rawChildValue = parsedJson ? getValueAtPath(parsedJson, child.path.replace(/^[^\.]+\.?/, "")) : undefined;
+                        const childValue = child.value !== undefined ? child.value : rawChildValue;
+
                         return (
                           <tr key={child.id}>
                             <td className="px-6 py-5 font-bold text-black">{child.label}</td>
@@ -687,12 +686,21 @@ export default function ExtractionPage() {
                               {childValue === undefined
                                 ? "—"
                                 : typeof childValue === "object"
-                                  ? JSON.stringify(childValue)
+                                  ? Array.isArray(childValue)
+                                    ? `Array (${childValue.length} items)`
+                                    : "Object"
                                   : String(childValue)}
                             </td>
                           </tr>
                         );
                       })}
+                      {!activeNode && (
+                        <tr>
+                          <td colSpan={2} className="px-6 py-10 text-center text-slate-400 italic">
+                            Select an item from the file structure to view details
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -712,8 +720,8 @@ export default function ExtractionPage() {
                 <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
                   Status
                 </span>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-50 px-2.5 py-1 text-[10px] font-bold text-slate-700">
-                  <span className="size-1 rounded-full bg-slate-900" />
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-900 border border-slate-200">
+                  <span className="size-1 rounded-full bg-black" />
                   Extracted
                 </span>
               </div>

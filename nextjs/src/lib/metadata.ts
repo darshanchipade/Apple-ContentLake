@@ -23,16 +23,26 @@ export const pickPageId = (
   record: Record<string, unknown> | null | undefined,
 ): string | undefined => pickFromRecord(record, PAGE_ID_KEYS);
 
+export const extractLocaleFromFilename = (filename: string): string | undefined => {
+  if (!filename) return undefined;
+  // Match patterns like zh_CN, en-US, fr-sn, etc.
+  const regex = /\b([a-z]{2}[-_][A-Z]{2})\b|\b([a-z]{2}[-_][a-z]{2})\b/g;
+  const match = filename.match(regex);
+  return match ? match[0] : undefined;
+};
+
 export const extractLocaleAndPageId = (
   payload: unknown,
+  filename?: string,
 ): { locale?: string; pageId?: string } => {
-  if (!payload || typeof payload !== "object") return {};
-  const visited = new Set<object>();
-  // Use BFS (Queue) instead of DFS (Stack) to prioritize root-level metadata
-  const queue: unknown[] = [payload];
-  const MAX_NODES = 1000;
-  let locale: string | undefined;
+  let locale = filename ? extractLocaleFromFilename(filename) : undefined;
   let pageId: string | undefined;
+
+  if (!payload || typeof payload !== "object") return { locale, pageId };
+
+  const visited = new Set<object>();
+  const queue: unknown[] = [payload];
+  const MAX_NODES = 1500;
 
   while (queue.length && visited.size < MAX_NODES && (!locale || !pageId)) {
     const current = queue.shift();

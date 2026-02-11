@@ -13,7 +13,6 @@
  import { StageHero } from "@/components/StageHero";
  import { describeSourceLabel, inferSourceType, pickString } from "@/lib/source";
  import { pickLocale, pickPageId } from "@/lib/metadata";
- import clsx from 'clsx';
 
  type Feedback = {
    state: "idle" | "loading" | "success" | "error";
@@ -108,45 +107,39 @@
    ENRICHMENT_RUNNING: "Enrichment running",
    PARTIALLY_ENRICHED: "Partially enriched",
    ENRICHMENT_COMPLETE: "Enrichment complete",
-   ENRICHED_NO_ITEMS_TO_PROCESS: "No items require enrichment",
    ERROR: "Failed",
  };
 
  const STATUS_COLORS: Record<string, { className: string; dot: string; background: string }> = {
    ENRICHMENT_TRIGGERED: {
-     className: "text-slate-600",
-     dot: "bg-slate-300",
-     background: "bg-slate-50",
+     className: "text-indigo-700",
+     dot: "bg-indigo-400",
+     background: "bg-indigo-50",
    },
    WAITING_FOR_RESULTS: {
-     className: "text-slate-900",
-     dot: "bg-slate-400",
-     background: "bg-slate-100",
+     className: "text-amber-700",
+     dot: "bg-amber-400",
+     background: "bg-amber-50",
    },
    ENRICHMENT_RUNNING: {
-     className: "text-slate-900 font-bold",
-     dot: "bg-black animate-pulse",
-     background: "bg-slate-50 border border-slate-200",
+     className: "text-sky-700",
+     dot: "bg-sky-400",
+     background: "bg-sky-50",
    },
    ENRICHMENT_COMPLETE: {
-     className: "text-black font-bold",
-     dot: "bg-black",
-     background: "bg-slate-100 border border-slate-200",
-   },
-   ENRICHED_NO_ITEMS_TO_PROCESS: {
-     className: "text-slate-500 font-bold",
-     dot: "bg-slate-400",
-     background: "bg-slate-50 border border-slate-200",
+     className: "text-emerald-700",
+     dot: "bg-emerald-500",
+     background: "bg-emerald-50",
    },
    PARTIALLY_ENRICHED: {
-     className: "text-slate-700",
-     dot: "bg-slate-400",
-     background: "bg-slate-50",
+     className: "text-sky-700",
+     dot: "bg-sky-400",
+     background: "bg-sky-50",
    },
    ERROR: {
-     className: "text-slate-500",
-     dot: "bg-slate-300",
-     background: "bg-slate-50 border border-slate-200",
+     className: "text-rose-700",
+     dot: "bg-rose-400",
+     background: "bg-rose-50",
    },
  };
 
@@ -941,13 +934,23 @@ const normalized = source.trim().toUpperCase();
                   ? (backendRecord?.["statusHistory"] as { status: string; timestamp: number }[])
                   : null;
 
+                const isDuplicate = (mergedMetadata as any).isDuplicate;
+                let statusHistory = backendHistory && backendHistory.length ? backendHistory : FALLBACK_HISTORY;
+
+                if (isDuplicate && !statusHistory.some(h => h.status === "ENRICHED_NO_ITEMS_TO_PROCESS")) {
+                  statusHistory = [
+                    ...statusHistory,
+                    { status: "ENRICHED_NO_ITEMS_TO_PROCESS", timestamp: Date.now() }
+                  ];
+                }
+
                 const remoteContext: RemoteEnrichmentContext = {
                   metadata: mergedMetadata,
                   startedAt:
                     pickNumber(backendRecord?.startedAt) ??
                     pickNumber(proxyPayload.startedAt) ??
                     Date.now(),
-                  statusHistory: backendHistory && backendHistory.length ? backendHistory : FALLBACK_HISTORY,
+                  statusHistory,
                 };
 
                 saveEnrichmentContext(remoteContext);
@@ -1390,20 +1393,34 @@ const normalized = source.trim().toUpperCase();
 
              useEffect(() => {
                loadContext(activeId).catch(() => undefined);
-               // eslint-disable-next-line react-hooks/exhaustive-deps
              }, [activeId]);
+	     const statusHistory = context?.statusHistory?.length
+               ? context.statusHistory
+               : FALLBACK_HISTORY;
+             const currentStatus = statusHistory[statusHistory.length - 1]?.status ?? "WAITING_FOR_RESULTS";
+              useEffect(() => {
+                if (!activeId) return;
+
+                const isComplete = currentStatus === "ENRICHMENT_COMPLETE" ||
+                                 currentStatus === "ENRICHED_NO_ITEMS_TO_PROCESS" ||
+                                 currentStatus === "ERROR";
+
+                if (isComplete) return;
+
+                const interval = setInterval(() => {
+                  loadContext(activeId, { showSpinner: false }).catch(() => undefined);
+                }, 5000);
+
+                return () => clearInterval(interval);
+              }, [activeId, currentStatus]);
 
              useEffect(() => {
                if (context?.metadata.cleansedId) {
                  fetchSummary(context.metadata.cleansedId, true);
                }
-               // eslint-disable-next-line react-hooks/exhaustive-deps
-             }, [context?.metadata.cleansedId]);
+              }, [context?.metadata.cleansedId, currentStatus]);
 
-             const statusHistory = context?.statusHistory?.length
-               ? context.statusHistory
-               : FALLBACK_HISTORY;
-             const currentStatus = statusHistory[statusHistory.length - 1]?.status ?? "WAITING_FOR_RESULTS";
+
              const statusMeta = STATUS_COLORS[currentStatus] ?? {
                className: "text-slate-700",
                dot: "bg-slate-300",
@@ -1412,19 +1429,21 @@ const normalized = source.trim().toUpperCase();
            };
 
              const progress = useMemo(() => {
+               if (currentStatus === "ENRICHED_NO_ITEMS_TO_PROCESS" || currentStatus === "ENRICHMENT_COMPLETE") {
+                 return 100;
+               }
                const statuses = [
                  "ENRICHMENT_TRIGGERED",
                  "WAITING_FOR_RESULTS",
                  "ENRICHMENT_RUNNING",
                  "PARTIALLY_ENRICHED",
-                 "ENRICHMENT_COMPLETE",
                ];
                const index = statuses.findIndex((status) => status === currentStatus);
                if (index >= 0) {
-                 return ((index + 1) / statuses.length) * 100;
+                 return ((index + 1) / (statuses.length + 1)) * 100;
                }
                const derivedIndex = Math.min(statusHistory.length, statuses.length);
-               return (derivedIndex / statuses.length) * 100;
+               return (derivedIndex / (statuses.length + 1)) * 100;
              }, [currentStatus, statusHistory.length]);
 
              const metrics = enrichmentResult?.metrics ?? {};
@@ -1549,66 +1568,61 @@ const normalized = source.trim().toUpperCase();
              const sourceIdentifier = context.metadata.sourceIdentifier ?? "—";
 
              return (
-               <PipelineShell currentStep="enrichment" breadcrumbExtra={context.metadata.name}>
+               <PipelineShell currentStep="enrichment">
                  <StageHero
                    title="Enrichment"
                    description={`Monitor enrichment for ${context.metadata.name}`}
                    actionsSlot={
                      statusFeedback.state !== "idle" ? (
                        <div
-                         className={`inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider ${
+                         className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold ${
                            statusFeedback.state === "loading"
-                             ? "bg-slate-50 text-slate-500"
+                             ? "bg-indigo-50 text-indigo-600"
                              : statusFeedback.state === "success"
-                               ? "bg-slate-100 text-black border border-slate-200"
-                               : "bg-slate-50 text-slate-400 border border-slate-200"
+                               ? "bg-emerald-50 text-emerald-700"
+                               : "bg-rose-50 text-rose-700"
                          }`}
                        >
-                         <span className={clsx("size-1.5 rounded-full", statusFeedback.state === "loading" ? "bg-slate-300 animate-pulse" : statusFeedback.state === "success" ? "bg-black" : "bg-slate-300")} />
                          {statusFeedback.message ??
                            (statusFeedback.state === "loading"
-                             ? "Refreshing..."
+                             ? "Refreshing status…"
                              : statusFeedback.state === "success"
-                               ? "Updated"
-                               : "Failed")}
+                               ? "Status updated."
+                               : "Unable to refresh status.")}
                        </div>
                      ) : null
                    }
                  />
 
-                 <main className="mx-auto flex max-w-[1600px] flex-col gap-6 px-8 py-8">
-                   <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-                     <div className="flex flex-col gap-8 lg:flex-row lg:items-center">
-                       <div className="flex-[0.6]">
-                         <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Current status</p>
-                         <div className={`mt-3 inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-bold uppercase tracking-wider ${statusMeta.background} ${statusMeta.className}`}>
+                 <main className="mx-auto flex max-w-6xl flex-col gap-6 px-6 py-10">
+                   <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                     <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                       <div>
+                         <p className="text-xs uppercase tracking-wide text-slate-400">Current status</p>
+                         <div className={`mt-2 inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold ${statusMeta.background} ${statusMeta.className}`}>
                            <span className={`h-2 w-2 rounded-full ${statusMeta.dot}`} />
                            {STATUS_LABELS[currentStatus] ?? currentStatus}
                          </div>
                        </div>
-                       <div className="flex-1">
-                         <div className="flex items-center justify-between mb-3">
-                           <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                             Pipeline progress
-                           </p>
-                           <span className="text-[10px] font-bold text-black">{Math.round(progress)}%</span>
-                         </div>
-                         <div className="h-3 rounded-full bg-slate-100 overflow-hidden shadow-inner">
+                       <div className="w-full max-w-md">
+                         <p className="text-xs uppercase tracking-wide text-slate-400">
+                           Pipeline progress
+                         </p>
+                         <div className="mt-2 h-2 rounded-full bg-slate-100">
                            <div
-                             className="h-full bg-black transition-all duration-500 ease-out shadow-[0_0_12px_rgba(0,0,0,0.2)]"
+                             className="h-full rounded-full bg-indigo-500 transition-all"
                              style={{ width: `${progress}%` }}
                            />
                          </div>
+                         <p className="mt-1 text-xs text-slate-500">{Math.round(progress)}% complete</p>
                        </div>
-                       <div className="flex-[0.4] flex justify-end">
-                         <button
-                           type="button"
-                           onClick={handleRefreshStatus}
-                           className="rounded-xl border border-slate-200 bg-white px-6 py-3 text-xs font-bold uppercase tracking-widest text-slate-500 hover:border-black hover:text-black transition-all active:scale-95"
-                         >
-                           Refresh Status
-                         </button>
-                       </div>
+                       <button
+                         type="button"
+                         onClick={handleRefreshStatus}
+                         className="rounded-full border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:border-indigo-300 hover:text-indigo-700"
+                       >
+                         Refresh Status
+                       </button>
                      </div>
                      <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                        <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
@@ -1677,309 +1691,31 @@ const normalized = source.trim().toUpperCase();
                                     </div>
                                   </section>
 
-                                   <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
-                                     <div className="space-y-6">
-                                       <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-                                         <div className="flex items-center justify-between mb-8">
-                                           <div>
-                                             <h2 className="text-lg font-bold text-black uppercase tracking-tight">AI Summary Preview</h2>
-                                             <p className="mt-1 text-xs font-medium text-slate-400">
-                                               Review and edit generated insights
+                                  <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                                    <p className="text-xs uppercase tracking-wide text-slate-400">Status timeline</p>
+                                    <h2 className="text-lg font-semibold text-slate-900">Pipeline events</h2>
+                                    <div className="mt-4 space-y-4 border-l border-slate-200 pl-6">
+                                      {statusHistory.map((entry) => {
+                                        const meta = STATUS_COLORS[entry.status] ?? {
+                                          className: "text-slate-700",
+                                          dot: "bg-slate-300",
+                                        };
+                                        return (
+                                          <div key={`${entry.status}-${entry.timestamp}`} className="relative">
+                                            <span
+                                              className={`absolute -left-[33px] mt-1 inline-flex h-3 w-3 rounded-full ${meta.dot}`}
+                                            />
+                                            <p className={`text-sm font-semibold ${meta.className}`}>
+                                              {STATUS_LABELS[entry.status] ?? entry.status}
+                                            </p>
+                                            <p className="text-xs text-slate-500">
+                                              {new Date(entry.timestamp).toLocaleString()}
                                             </p>
                                           </div>
-                                         </div>
-                                         {summaryFeedback.state === "loading" ? (
-                                           <div className="py-20 text-center">
-                                             <span className="inline-flex size-6 animate-spin rounded-full border-2 border-slate-100 border-t-black" />
-                                             <p className="mt-4 text-sm font-medium text-slate-400 uppercase tracking-widest">Generating results...</p>
-                                           </div>
-                                         ) : summaryFeedback.state === "error" ? (
-                                           <div className="rounded-2xl bg-slate-50 p-8 text-center border border-slate-100">
-                                             <p className="text-sm font-bold text-slate-900">{summaryFeedback.message}</p>
-                                             <button
-                                               type="button"
-                                               onClick={() => context.metadata.cleansedId && fetchSummary(context.metadata.cleansedId, true)}
-                                               className="mt-6 rounded-xl bg-black px-8 py-2.5 text-xs font-bold text-white uppercase tracking-widest"
-                                             >
-                                               Retry
-                                             </button>
-                                           </div>
-                                         ) : enrichmentResult?.elements.length ? (
-                                           <div className="space-y-4">
-                                             {groupedElements.map((group) => {
-                                               const isExpanded = expandedGroups.has(group.id);
-                                               return (
-                                                 <div key={group.id} className="rounded-2xl border border-slate-100 overflow-hidden bg-white group/section transition-all hover:border-slate-300">
-                                                   <button
-                                                     type="button"
-                                                     onClick={() => toggleGroup(group.id)}
-                                                     className="flex w-full items-center justify-between gap-3 px-6 py-4 text-left bg-slate-50 group-hover/section:bg-slate-100/50 transition-colors"
-                                                   >
-                                                     <div className="flex items-center gap-3">
-                                                       <span className="text-xs font-black text-black uppercase tracking-widest">{group.label}</span>
-                                                       <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-400 border border-slate-100">
-                                                         {group.elements.length} items
-                                                       </span>
-                                                     </div>
-                                                     {isExpanded ? (
-                                                       <ChevronDownIcon className="size-4 text-slate-400" />
-                                                     ) : (
-                                                       <ChevronRightIcon className="size-4 text-slate-400" />
-                                                     )}
-                                                   </button>
-                                                   {isExpanded && (
-                                                     <div className="divide-y divide-slate-50 bg-white">
-                                                       {group.elements.map((element, elementIndex) => {
-                                                         const isDetailVisible = expandedElementId === element.id;
-                                                         const sourcePath = element.path?.trim();
-                                                         const normalizedTitle = element.title?.trim() ?? "";
-                                                         const primaryLabel =
-                                                           normalizedTitle.length > 0
-                                                             ? normalizedTitle
-                                                             : sourcePath
-                                                               ? humanizePath(sourcePath)
-                                                               : `Field ${elementIndex + 1}`;
-                                                         const editState = elementEdits[element.id] ?? buildEditState(element);
-                                                         const insightsBusy =
-                                                           editState.isSavingInsights || editState.isGeneratingInsights;
-                                                         const metadataBusy =
-                                                           editState.isSavingMetadata || editState.isGeneratingMetadata;
-                                                         const historyIsOpen = historyOpen[element.id] ?? false;
-                                                         const revisionList = historyRecords[element.id] ?? [];
-                                                         const historyBusy = historyLoading[element.id] ?? false;
-                                                         const historyMessage = historyError[element.id];
-                                                         const restoringRevisionId = historyRestoring[element.id] ?? null;
-                                                         const latestAiRevisionId = revisionList.find((revision) => {
-                                                           const source = normalizeRevisionSource(revision.source);
-                                                           return source === "AI" || source === "REGENERATE";
-                                                         })?.id;
-                                                         const latestUserRevisionId = revisionList.find((revision) => {
-                                                           return normalizeRevisionSource(revision.source) === "USER";
-                                                         })?.id;
-
-                                                         return (
-                                                           <div key={element.id} className="p-2">
-                                                             <button
-                                                               type="button"
-                                                               onClick={() => toggleElementDetails(element.id)}
-                                                               className={clsx(
-                                                                 "flex w-full items-center justify-between gap-4 px-4 py-3 rounded-xl transition-all",
-                                                                 isDetailVisible ? "bg-black text-white shadow-lg" : "hover:bg-slate-50 text-slate-900"
-                                                               )}
-                                                             >
-                                                               <div className="flex flex-col text-left overflow-hidden">
-                                                                 <div className="flex items-center gap-2">
-                                                                   <p className="text-sm font-bold truncate">{primaryLabel}</p>
-                                                                   {element.newAiAvailable && (
-                                                                     <span className="size-1.5 rounded-full bg-slate-400" />
-                                                                   )}
-                                                                 </div>
-                                                                 <p className={clsx("text-[10px] font-medium uppercase tracking-wider truncate", isDetailVisible ? "text-slate-400" : "text-slate-400")}>
-                                                                   {sourcePath ?? "No path provided"}
-                                                                 </p>
-                                                               </div>
-                                                               {isDetailVisible ? (
-                                                                 <ChevronDownIcon className="size-4 shrink-0" />
-                                                               ) : (
-                                                                 <ChevronRightIcon className="size-4 shrink-0 opacity-40" />
-                                                               )}
-                                                             </button>
-
-                                                             {isDetailVisible && (
-                                                               <div className="mt-2 space-y-6 p-6 bg-slate-50 rounded-2xl border border-slate-200/50">
-                                                                 <div className="grid gap-6 lg:grid-cols-2">
-                                                                   {/* Insights Card */}
-                                                                   <div className="rounded-2xl bg-white p-6 shadow-sm border border-slate-100">
-                                                                     <div className="flex items-center justify-between mb-4">
-                                                                       <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Content Summary</h4>
-                                                                       <div className="flex gap-2">
-                                                                         {!editState.isEditingInsights ? (
-                                                                           <button
-                                                                             onClick={() => ensureElementEditState(element, { isEditingInsights: true })}
-                                                                             className="text-[10px] font-bold uppercase tracking-widest text-slate-400 hover:text-black transition-colors"
-                                                                           >
-                                                                             Edit
-                                                                           </button>
-                                                                         ) : (
-                                                                           <div className="flex gap-3">
-                                                                             <button
-                                                                               onClick={() => handleSaveInsights(element)}
-                                                                               className="text-[10px] font-bold uppercase tracking-widest text-black"
-                                                                             >
-                                                                               {editState.isSavingInsights ? "..." : "Save"}
-                                                                             </button>
-                                                                             <button
-                                                                               onClick={() => ensureElementEditState(element, { isEditingInsights: false })}
-                                                                               className="text-[10px] font-bold uppercase tracking-widest text-slate-400"
-                                                                             >
-                                                                               Cancel
-                                                                             </button>
-                                                                           </div>
-                                                                         )}
-                                                                       </div>
-                                                                     </div>
-
-                                                                     {editState.isEditingInsights ? (
-                                                                       <textarea
-                                                                         value={editState.summary}
-                                                                         onChange={(e) => ensureElementEditState(element, { summary: e.target.value })}
-                                                                         rows={4}
-                                                                         className="w-full rounded-xl border border-slate-100 bg-slate-50 p-4 text-sm text-black focus:bg-white focus:border-black focus:outline-none transition-all"
-                                                                       />
-                                                                     ) : (
-                                                                       <p className="text-sm text-slate-600 leading-relaxed font-medium italic">
-                                                                         "{element.summary ?? "No summary generated."}"
-                                                                       </p>
-                                                                     )}
-                                                                   </div>
-
-                                                                   {/* Metadata Card */}
-                                                                   <div className="rounded-2xl bg-white p-6 shadow-sm border border-slate-100">
-                                                                     <div className="flex items-center justify-between mb-4">
-                                                                       <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Search Keywords</h4>
-                                                                       <button
-                                                                         onClick={() => ensureElementEditState(element, { isEditingMetadata: !editState.isEditingMetadata })}
-                                                                         className="text-[10px] font-bold uppercase tracking-widest text-slate-400 hover:text-black transition-colors"
-                                                                       >
-                                                                         {editState.isEditingMetadata ? "Cancel" : "Edit"}
-                                                                       </button>
-                                                                     </div>
-
-                                                                     {editState.isEditingMetadata ? (
-                                                                       <textarea
-                                                                         value={editState.keywords}
-                                                                         onChange={(e) => ensureElementEditState(element, { keywords: e.target.value })}
-                                                                         rows={3}
-                                                                         className="w-full rounded-xl border border-slate-100 bg-slate-50 p-4 text-sm text-black focus:bg-white focus:border-black focus:outline-none transition-all"
-                                                                       />
-                                                                     ) : (
-                                                                       <div className="flex flex-wrap gap-1.5">
-                                                                         {element.keywords?.map(kw => (
-                                                                           <span key={kw} className="rounded-lg bg-slate-50 border border-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-600 uppercase tracking-wider">
-                                                                             {kw}
-                                                                           </span>
-                                                                         )) ?? <p className="text-xs text-slate-400">None detected</p>}
-                                                                       </div>
-                                                                     )}
-                                                                   </div>
-                                                                 </div>
-
-                                                                 {/* Version History */}
-                                                                 <div className="pt-6 border-t border-slate-200/60">
-                                                                   <button
-                                                                     onClick={() => toggleHistoryPanel(element.id)}
-                                                                     className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 hover:text-black transition-colors"
-                                                                   >
-                                                                     <span className={clsx("size-1 rounded-full", historyIsOpen ? "bg-black" : "bg-slate-300")} />
-                                                                     {historyIsOpen ? "Hide revision history" : "View revision history"}
-                                                                   </button>
-
-                                                                   {historyIsOpen && (
-                                                                     <div className="mt-4 space-y-2">
-                                                                       {revisionList.map((rev, i) => (
-                                                                         <div key={rev.id} className="flex items-center justify-between p-4 rounded-xl bg-white border border-slate-100">
-                                                                           <div>
-                                                                             <p className="text-[10px] font-bold text-black uppercase tracking-wider">Revision {rev.revision} · {rev.source}</p>
-                                                                             <p className="text-[10px] text-slate-400 mt-0.5">{new Date(rev.createdAt!).toLocaleString()}</p>
-                                                                           </div>
-                                                                           {i > 0 && (
-                                                                             <button
-                                                                               onClick={() => handleRestoreRevision(element, rev)}
-                                                                               disabled={restoringRevisionId === rev.id}
-                                                                               className="text-[10px] font-black uppercase text-black hover:underline disabled:opacity-30"
-                                                                             >
-                                                                               Restore
-                                                                             </button>
-                                                                           )}
-                                                                         </div>
-                                                                       ))}
-                                                                     </div>
-                                                                   )}
-                                                                 </div>
-                                                               </div>
-                                                             )}
-                                                           </div>
-                                                         );
-                                                       })}
-                                                     </div>
-                                                   )}
-                                                 </div>
-                                               );
-                                             })}
-                                           </div>
-                                         ) : rawSummary ? (
-                                           <div className="rounded-2xl bg-slate-900 p-8">
-                                             <pre className="text-xs font-mono text-slate-400 leading-relaxed overflow-auto max-h-[400px] scrollbar-thin scrollbar-thumb-slate-700">
-                                               {rawSummary}
-                                             </pre>
-                                           </div>
-                                         ) : (
-                                           <div className="py-20 text-center opacity-40 border border-dashed border-slate-200 rounded-3xl">
-                                             <p className="text-sm font-medium text-slate-500 uppercase tracking-widest">Waiting for enrichment data...</p>
-                                           </div>
-                                         )}
-                                       </section>
+                                        );
+                                      })}
                                     </div>
-
-                                     {/* Side Pane: Events & Metadata */}
-                                     <aside className="space-y-6">
-                                       <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-                                         <h3 className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-400 mb-8">Pipeline Events</h3>
-                                         <div className="space-y-8 relative">
-                                           <div className="absolute left-[7px] top-2 bottom-2 w-px bg-slate-100" />
-                                           {statusHistory.map((entry, idx) => {
-                                             const meta = STATUS_COLORS[entry.status] ?? {
-                                               className: "text-slate-400",
-                                               dot: "bg-slate-200",
-                                             };
-                                             const isLatest = idx === statusHistory.length - 1;
-                                             return (
-                                               <div key={`${entry.status}-${entry.timestamp}`} className="relative pl-8">
-                                                 <span className={clsx(
-                                                   "absolute left-0 top-1.5 size-4 rounded-full border-4 border-white ring-1 transition-all",
-                                                   isLatest ? "bg-black ring-black scale-125 shadow-lg shadow-black/20" : "bg-slate-200 ring-slate-200"
-                                                 )} />
-                                                 <p className={clsx("text-xs font-bold uppercase tracking-wider", isLatest ? "text-black" : "text-slate-400")}>
-                                                   {STATUS_LABELS[entry.status] ?? entry.status}
-                                                 </p>
-                                                 <p className="mt-1 text-[10px] font-medium text-slate-400">
-                                                   {new Date(entry.timestamp).toLocaleTimeString()}
-                                                 </p>
-                                               </div>
-                                             );
-                                           })}
-                                         </div>
-                                       </section>
-
-                                       <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-                                         <h3 className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-400 mb-6">File Metadata</h3>
-                                         <div className="space-y-6">
-                                           {[
-                                             { label: "Locale", value: context.metadata.locale ?? "—" },
-                                             { label: "Page ID", value: context.metadata.pageId ?? "—" },
-                                             { label: "Cleansed ID", value: context.metadata.cleansedId ?? "—" },
-                                             { label: "Started", value: new Date(context.startedAt).toLocaleTimeString() },
-                                           ].map(item => (
-                                             <div key={item.label} className="group">
-                                               <dt className="text-[10px] font-bold uppercase tracking-widest text-slate-400 group-hover:text-black transition-colors">{item.label}</dt>
-                                               <dd className="mt-1.5 text-xs font-bold text-black break-all">{item.value}</dd>
-                                             </div>
-                                           ))}
-                                         </div>
-                                         <div className="mt-10 pt-8 border-t border-slate-100">
-                                           <button
-                                             onClick={() => {
-                                               clearEnrichmentContext();
-                                               router.push("/ingestion");
-                                             }}
-                                             className="w-full rounded-xl bg-slate-900 py-3 text-[10px] font-black uppercase tracking-[0.2em] text-white shadow-lg shadow-black/20 hover:bg-black transition-all active:scale-95"
-                                           >
-                                             Finish Session
-                                           </button>
-                                         </div>
-                                       </section>
-                                     </aside>
-                                   </div>
+                                  </section>
 
                                   <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
                                     <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -1996,13 +1732,13 @@ const normalized = source.trim().toUpperCase();
                                         Loading enrichment summary…
                                       </div>
                                     ) : summaryFeedback.state === "error" ? (
-                                      <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                        <p className="font-semibold text-slate-800">Unable to load enrichment summary.</p>
-                                        <p className="text-xs text-slate-900/80">{summaryFeedback.message}</p>
+                                      <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                                        <p className="font-semibold text-amber-800">Unable to load enrichment summary.</p>
+                                        <p className="text-xs text-amber-900/80">{summaryFeedback.message}</p>
                                         <button
                                           type="button"
                                           onClick={() => context.metadata.cleansedId && fetchSummary(context.metadata.cleansedId, true)}
-                                          className="mt-3 rounded-full bg-slate-600 px-3 py-1 text-xs font-semibold text-white"
+                                          className="mt-3 rounded-full bg-amber-600 px-3 py-1 text-xs font-semibold text-white"
                                         >
                                           Retry
                                         </button>
@@ -2077,7 +1813,7 @@ const normalized = source.trim().toUpperCase();
                                                                   {primaryLabel}
                                                                 </p>
                                                                 {element.newAiAvailable && (
-                                                                  <span className="rounded-full bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                                                                  <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
                                                                     New AI available
                                                                   </span>
                                                                 )}
@@ -2176,7 +1912,7 @@ const normalized = source.trim().toUpperCase();
                                                    ])
                                                  }
                                                  disabled={insightsBusy}
-                                                 className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-black hover:bg-slate-50"
+                                                 className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700"
                                                >
                                                  {editState.isGeneratingInsights
                                                    ? "Generating…"
@@ -2197,7 +1933,7 @@ const normalized = source.trim().toUpperCase();
                                                    handleGenerateFields(element, ["summary"])
                                                  }
                                                  disabled={insightsBusy}
-                                                 className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-black hover:bg-slate-50"
+                                                 className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700"
                                                >
                                                  Generate
                                                </button>
@@ -2223,7 +1959,7 @@ const normalized = source.trim().toUpperCase();
                                                      handleGenerateFields(element, ["classification"])
                                                    }
                                                    disabled={insightsBusy}
-                                                   className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-black hover:bg-slate-50"
+                                                   className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700"
                                                  >
                                                    Generate
                                                  </button>
@@ -2264,7 +2000,7 @@ const normalized = source.trim().toUpperCase();
                                            </>
                                          )}
                                          {editState.error && (
-                                           <p className="mt-3 text-xs text-slate-600">
+                                           <p className="mt-3 text-xs text-rose-600">
                                              {editState.error}
                                            </p>
                                          )}
@@ -2325,7 +2061,7 @@ const normalized = source.trim().toUpperCase();
                                                    handleGenerateFields(element, ["keywords", "tags"])
                                                  }
                                                  disabled={metadataBusy}
-                                                 className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-black hover:bg-slate-50"
+                                                 className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700"
                                                >
                                                  {editState.isGeneratingMetadata
                                                    ? "Generating…"
@@ -2347,7 +2083,7 @@ const normalized = source.trim().toUpperCase();
                                                      handleGenerateFields(element, ["keywords"])
                                                    }
                                                    disabled={metadataBusy}
-                                                   className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-black hover:bg-slate-50"
+                                                   className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700"
                                                  >
                                                    Generate
                                                  </button>
@@ -2375,7 +2111,7 @@ const normalized = source.trim().toUpperCase();
                                                      handleGenerateFields(element, ["tags"])
                                                    }
                                                    disabled={metadataBusy}
-                                                   className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-black hover:bg-slate-50"
+                                                   className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700"
                                                  >
                                                    Generate
                                                  </button>
@@ -2420,7 +2156,7 @@ const normalized = source.trim().toUpperCase();
                                            </div>
                                          )}
                                          {editState.error && (
-                                           <p className="mt-3 text-xs text-slate-600">
+                                           <p className="mt-3 text-xs text-rose-600">
                                              {editState.error}
                                            </p>
                                          )}
@@ -2429,20 +2165,20 @@ const normalized = source.trim().toUpperCase();
                                          <p className="text-xs uppercase tracking-wide text-slate-400">
                                            Tone & sentiment
                                          </p>
-                                         <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                                         <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
                                            {element.sentiment ? (
                                              <>
-                                               <p className="text-sm font-semibold text-slate-700">
+                                               <p className="text-sm font-semibold text-emerald-700">
                                                  {element.sentiment.label}
                                                </p>
                                                {element.sentiment.score !== undefined && (
-                                                 <p className="text-xs text-slate-600">
+                                                 <p className="text-xs text-emerald-800">
                                                    Score: {Math.round(element.sentiment.score * 100) / 100}
                                                  </p>
                                                )}
                                              </>
                                            ) : (
-                                             <p className="text-sm text-slate-600/80">
+                                             <p className="text-sm text-emerald-800/80">
                                                Sentiment analytics will appear after enrichment completes.
                                              </p>
                                            )}
@@ -2474,7 +2210,7 @@ const normalized = source.trim().toUpperCase();
                                                Loading revision history…
                                              </p>
                                            ) : historyMessage ? (
-                                             <p className="text-xs text-slate-600">{historyMessage}</p>
+                                             <p className="text-xs text-rose-600">{historyMessage}</p>
                                            ) : revisionList.length ? (
                                              revisionList.map((revision, index) => (
                                                <div
@@ -2510,7 +2246,7 @@ const normalized = source.trim().toUpperCase();
                                                                                                               </div>
                                                                                                               <div className="flex items-center gap-2">
                                                                                                                 {index === 0 ? (
-                                                                                                                  <span className="rounded-full bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                                                                                                                  <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
                                                                                                                     Current
                                                                                                                   </span>
                                                                                                                 ) : (
@@ -2532,7 +2268,7 @@ const normalized = source.trim().toUpperCase();
                                                                                                                 )}
                                                                                                                 {revision.id &&
                                                                                                                   revision.id === latestAiRevisionId && (
-                                                                                                                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-900 border border-slate-200">
+                                                                                                                    <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700">
                                                                                                                       Latest AI
                                                                                                                     </span>
                                                                                                                   )}
@@ -2597,6 +2333,41 @@ const normalized = source.trim().toUpperCase();
                                                                       )}
                                                                     </section>
 
+                                                                    <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                                                                      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                                                        <div>
+                                                                          <p className="text-xs uppercase tracking-wide text-slate-400">Next steps</p>
+                                                                          <h2 className="text-lg font-semibold text-slate-900">
+                                                                            Wrap up or keep monitoring
+                                                                          </h2>
+                                                                        </div>
+                                                                        <div className="flex flex-wrap gap-2">
+                                                                          <button
+                                                                            type="button"
+                                                                            onClick={() => router.push("/cleansing")}
+                                                                            className="rounded-full border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700"
+                                                                          >
+                                                                            Back to Cleansing
+                                                                          </button>
+                                                                          <button
+                                                                            type="button"
+                                                                            onClick={handleRefreshStatus}
+                                                                            className="rounded-full border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700"
+                                                                          >
+                                                                            Refresh Status
+                                                                          </button>
+                                                                          <button
+                                                                            type="button"
+                                                                            onClick={() => {
+                                                                              clearEnrichmentContext();
+                                                                              router.push("/ingestion");
+                                                                            }}
+                                                                            className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white">
+                                                                            Finish Session
+                                                                          </button>
+                                                                        </div>
+                                                                      </div>
+                                                                    </section>
                                                                   </main>
                                                                 </PipelineShell>
                                                               );

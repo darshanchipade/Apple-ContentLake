@@ -459,7 +459,7 @@ export default function CleansingPageClient() {
       />
 
       <main className="mx-auto flex max-w-[1600px] flex-col gap-6 px-8 py-8">
-        <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+        <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
           {/* Left Pane: Items Table */}
           <section className="flex flex-col rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden">
             <div className="p-6 border-b border-slate-100 flex items-center justify-between">

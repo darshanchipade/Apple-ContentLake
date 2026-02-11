@@ -109,7 +109,7 @@ export function PipelineShell({
         <div className="relative bg-[#F9FAFB]">
           {showTracker && (
             <div className="sticky top-0 z-30 border-b border-slate-200 bg-[#F9FAFB]/90 backdrop-blur">
-              <div className="mx-auto max-w-6xl px-6 py-6">
+              <div className="mx-auto max-w-[1600px] px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
                 <PipelineTracker current={currentStep} />
               </div>
             </div>

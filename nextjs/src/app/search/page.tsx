@@ -222,7 +222,7 @@ export default function SearchPage() {
         description="Explore Content Lake with AI-powered refinements fed by the Spring Boot search controller."
       />
 
-      <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-10">
+      <main className="mx-auto max-w-[1600px] px-4 py-6 sm:px-6 sm:py-10 lg:px-8">
         <div className="rounded-3xl border border-slate-200 bg-white px-4 py-8 shadow-sm sm:px-10 lg:px-16 overflow-hidden">
           <div className="flex justify-end gap-3 sm:gap-4 text-xs sm:text-sm font-semibold text-[#000000]">
             <a href="/ingestion" className="hover:underline">

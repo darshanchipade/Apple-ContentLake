@@ -575,7 +575,7 @@ export default function ExtractionPage() {
       />
 
       <main className="mx-auto flex max-w-[1600px] flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
-        <div className="grid h-auto lg:h-[calc(100vh-20rem)] lg:min-h-[600px] gap-6 lg:grid-cols-[320px_1fr_320px]">
+        <div className="grid h-auto lg:h-[calc(100vh-20rem)] lg:min-h-[600px] gap-6 lg:grid-cols-[280px_1fr_280px]">
           {/* Left Pane: File Structure */}
           <section className="flex flex-col rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm overflow-hidden max-h-[400px] lg:max-h-none">
             <div className="flex items-center justify-between mb-4 sm:mb-6">

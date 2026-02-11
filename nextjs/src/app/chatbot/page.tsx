@@ -123,8 +123,8 @@ export default function ChatbotPage() {
         description="Ask natural-language questions about your content. Responses stream from the Spring Boot ChatBotController."
       />
 
-      <main className="mx-auto w-full max-w-4xl px-6 py-10">
-        <div className="flex flex-col gap-4 rounded-[16px] bg-[#f9f9f9] px-4 py-6 md:px-8">
+      <main className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 sm:py-10 lg:px-8">
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 rounded-3xl border border-slate-200 bg-white px-4 py-6 shadow-sm md:px-8">
           <div className="flex items-center justify-between">
             <h2 className="text-2xl font-semibold text-[#111215]">Chatbot</h2>
             <a href="/search" className="text-sm font-semibold text-[#2180f9] hover:underline">

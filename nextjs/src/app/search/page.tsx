@@ -222,8 +222,8 @@ export default function SearchPage() {
         description="Explore Content Lake with AI-powered refinements fed by the Spring Boot search controller."
       />
 
-      <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-10">
-        <div className="rounded-3xl border border-slate-200 bg-white px-4 py-8 shadow-sm sm:px-10 lg:px-16">
+      <main className="mx-auto max-w-[1600px] px-4 py-6 sm:px-6 sm:py-10 lg:px-8">
+        <div className="rounded-3xl border border-slate-200 bg-white px-4 py-8 shadow-sm sm:px-10 lg:px-16 overflow-hidden">
           <div className="flex justify-end gap-3 sm:gap-4 text-xs sm:text-sm font-semibold text-[#000000]">
             <a href="/ingestion" className="hover:underline">
               Upload JSON
@@ -235,10 +235,10 @@ export default function SearchPage() {
 
           <div className="mt-8 flex flex-col items-center gap-8">
             <div className="text-center">
-              <h1 className="text-2xl font-bold tracking-tight text-[#111215] sm:text-4xl md:text-5xl">
+              <h1 className="text-[32px] font-medium tracking-[-0.768px] text-[#111215] md:text-[48px]">
                 What are you looking for?
               </h1>
-              <p className="mt-2 text-xs sm:text-sm text-[#4d4d4d]">Run an initial query to generate intelligent refinements.</p>
+              <p className="mt-2 text-sm text-[#4d4d4d]">Run an initial query to generate intelligent refinements.</p>
             </div>
 
             <SearchInterface

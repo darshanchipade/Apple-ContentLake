@@ -575,11 +575,11 @@ export default function ExtractionPage() {
       />
 
       <main className="mx-auto flex max-w-[1600px] flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
-        <div className="grid h-auto lg:h-[calc(100vh-20rem)] lg:min-h-[600px] gap-6 lg:grid-cols-[320px_1fr_320px]">
+        <div className="grid h-auto lg:h-[calc(100vh-20rem)] lg:min-h-[600px] gap-6 lg:grid-cols-[280px_1fr_280px]">
           {/* Left Pane: File Structure */}
           <section className="flex flex-col rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm overflow-hidden max-h-[400px] lg:max-h-none">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400">
+            <div className="flex items-center justify-between mb-4 sm:mb-6">
+              <h3 className="text-[10px] sm:text-sm font-bold uppercase tracking-widest text-slate-400">
                 File Structure
               </h3>
             </div>
@@ -614,15 +614,15 @@ export default function ExtractionPage() {
           {/* Center Pane: Data Preview */}
           <section className="flex flex-col rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden min-h-[400px]">
             <div className="flex items-center justify-between border-b border-slate-100 p-4 sm:p-6">
-              <div className="flex items-center gap-4">
-                <div className="flex size-10 items-center justify-center rounded-xl bg-slate-50 text-black">
-                  <Square2StackIcon className="size-5" />
+              <div className="flex items-center gap-3 sm:gap-4">
+                <div className="flex size-8 sm:size-10 items-center justify-center rounded-lg sm:rounded-xl bg-slate-50 text-black">
+                  <Square2StackIcon className="size-4 sm:size-5" />
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-black leading-none">
+                  <h2 className="text-sm sm:text-lg font-bold text-black leading-none truncate max-w-[120px] sm:max-w-none">
                     {activeNode?.label ?? "Select a node"}
                   </h2>
-                  <p className="mt-1.5 text-xs font-medium text-slate-400">
+                  <p className="mt-1 sm:mt-1.5 text-[10px] sm:text-xs font-medium text-slate-400 truncate max-w-[120px] sm:max-w-none">
                     {activeNode?.path ?? "Choose an item from the structure"}
                   </p>
                 </div>

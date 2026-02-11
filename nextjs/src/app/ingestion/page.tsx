@@ -1046,9 +1046,9 @@ export default function IngestionPage() {
         description="Upload local JSON files, paste API payloads, or reference cloud storage to kick off the pipeline."
       />
 
-      <main className="mx-auto grid max-w-6xl gap-6 px-4 py-6 sm:px-6 sm:py-10 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-        <section className="space-y-6">
-          <div className="rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm">
+      <main className="mx-auto grid max-w-[1600px] gap-6 px-4 py-6 sm:px-6 sm:py-10 lg:grid-cols-[1.2fr_1fr]">
+        <section className="space-y-6 overflow-hidden">
+          <div className="rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm overflow-hidden">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <p className="text-xs uppercase tracking-wide text-slate-400">
@@ -1064,7 +1064,7 @@ export default function IngestionPage() {
               <FeedbackPill feedback={extractFeedback} />
             </div>
 
-            <div className="mt-6 grid gap-3 md:grid-cols-3">
+            <div className="mt-6 grid gap-3 sm:grid-cols-3">
               {uploadTabs.map((tab) => (
                 <button
                   key={tab.id}
@@ -1076,11 +1076,11 @@ export default function IngestionPage() {
                     tab.disabled
                       ? "border-dashed border-slate-200 text-slate-400"
                       : activeTab === tab.id
-                        ? "border-slate-900 bg-slate-900/[0.04] shadow-lg"
+                        ? "border-slate-900 bg-slate-900/[0.04] shadow-[0_18px_35px_rgba(15,23,42,0.12)]"
                         : "border-slate-200 hover:border-slate-900/40",
                   )}
                 >
-                  <div className="flex items-center gap-3 md:flex-col md:items-start lg:flex-row lg:items-center">
+                  <div className="flex items-center gap-3">
                     <tab.icon
                       className={clsx(
                         "size-5 transition-colors",
@@ -1092,10 +1092,10 @@ export default function IngestionPage() {
                       )}
                     />
                     <div>
-                      <p className="text-sm font-semibold text-slate-900 leading-tight">
+                      <p className="text-sm font-semibold text-slate-900">
                         {tab.title}
                       </p>
-                      <p className="hidden text-[10px] text-slate-500 sm:block">
+                      <p className="text-xs text-slate-500">
                         {tab.description}
                       </p>
                     </div>
@@ -1191,10 +1191,10 @@ export default function IngestionPage() {
             )}
           </div>
 
-          <div className="rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm">
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="text-lg font-semibold text-slate-900">Upload History</h3>
-              <div className="relative w-full md:max-w-xs">
+              <div className="relative w-full max-w-xs">
                 <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-2.5 size-4 text-slate-400" />
                 <input
                   type="search"
@@ -1205,7 +1205,8 @@ export default function IngestionPage() {
               </div>
             </div>
 
-            <div className="mt-4 space-y-4">
+            <div className="mt-4 max-h-[400px] overflow-auto pr-2 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
+              <div className="space-y-4 min-w-[600px] sm:min-w-0">
               {uploads.length === 0 && (
                 <div className="rounded-2xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-500">
                   No uploads yet. Drop a JSON file to start the pipeline.
@@ -1275,11 +1276,12 @@ export default function IngestionPage() {
                   </div>
                 );
               })}
+              </div>
             </div>
           </div>
         </section>
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm">
+        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs uppercase tracking-wide text-slate-400">

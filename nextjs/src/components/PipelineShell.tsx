@@ -5,13 +5,11 @@ import {
   HomeModernIcon,
   MagnifyingGlassIcon,
   ChevronRightIcon,
-  Bars3Icon,
-  XMarkIcon,
 } from "@heroicons/react/24/outline";
 import clsx from "clsx";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { type ComponentType, type ReactNode, type SVGProps, useState, useEffect } from "react";
+import type { ComponentType, ReactNode, SVGProps } from "react";
 import { PipelineTracker, type StepId } from "@/components/PipelineTracker";
 
 type PipelineShellProps = {
@@ -35,48 +33,10 @@ export function PipelineShell({
   breadcrumbExtra,
 }: PipelineShellProps) {
   const pathname = usePathname();
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const activeLink = workspaceLinks.find((link) => pathname === link.href);
-
-  // Close mobile menu on path change
-  useEffect(() => {
-    setIsMobileMenuOpen(false);
-  }, [pathname]);
 
   return (
     <div className="flex min-h-screen bg-white text-slate-900">
-      {/* Mobile Menu Overlay */}
-      <div
-        className={clsx(
-          "fixed inset-0 z-50 bg-black/50 transition-opacity lg:hidden",
-          isMobileMenuOpen ? "opacity-100" : "pointer-events-none opacity-0"
-        )}
-        onClick={() => setIsMobileMenuOpen(false)}
-      />
-
-      {/* Mobile Sidebar */}
-      <aside
-        className={clsx(
-          "fixed inset-y-0 left-0 z-50 w-72 transform bg-white px-6 py-8 transition-transform duration-300 ease-in-out lg:hidden",
-          isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
-        )}
-      >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-black text-xl text-white">
-              
-            </div>
-            <p className="font-bold text-black">Content Lake</p>
-          </div>
-          <button onClick={() => setIsMobileMenuOpen(false)}>
-            <XMarkIcon className="size-6 text-slate-500" />
-          </button>
-        </div>
-        <nav className="mt-10 flex flex-col gap-8 text-sm">
-          <NavSection title="Workspaces" links={workspaceLinks} />
-        </nav>
-      </aside>
-
       <aside className="sticky top-0 hidden h-screen w-72 flex-col border-r border-slate-200 bg-white px-6 py-8 lg:flex">
         <div className="flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-black text-2xl text-white">
@@ -121,8 +81,8 @@ export function PipelineShell({
       </aside>
 
       <div className="flex-1">
-        {/* Breadcrumb Header - Hidden on mobile, replaced by mobile header */}
-        <header className="hidden h-16 items-center gap-2 border-b border-slate-200 bg-white px-8 text-sm text-slate-500 lg:flex">
+        {/* Breadcrumb Header */}
+        <header className="flex h-16 items-center gap-2 border-b border-slate-200 bg-white px-8 text-sm text-slate-500">
           <span className="font-medium">Workspaces</span>
           <ChevronRightIcon className="size-3 text-slate-400" />
           <span className={clsx("font-medium", !breadcrumbExtra && "text-black")}>
@@ -136,31 +96,20 @@ export function PipelineShell({
           )}
         </header>
 
-        {/* Mobile Header */}
-        <div className="sticky top-0 z-40 flex items-center justify-between border-b border-slate-200 bg-white/80 px-4 py-4 text-sm font-semibold text-black shadow-sm backdrop-blur-md lg:hidden">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setIsMobileMenuOpen(true)}
-              className="rounded-lg p-1 hover:bg-slate-100 transition-colors"
-            >
-              <Bars3Icon className="size-6 text-black" />
-            </button>
-            <div className="flex items-center gap-2">
-              <span className="font-bold">Content Lake</span>
-              <span className="text-[10px] uppercase tracking-widest text-slate-400">
-                {currentStep}
-              </span>
-            </div>
+        <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-4 text-sm font-semibold text-black shadow-sm lg:hidden">
+          <div className="flex items-center gap-2">
+            <span>Content Lake</span>
+            <span className="text-[0.65rem] uppercase tracking-[0.35em] text-slate-400">
+              · Workflow
+            </span>
           </div>
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-black text-white text-xs">
-            
-          </div>
+          <span>{currentStep}</span>
         </div>
 
         <div className="relative bg-[#F9FAFB]">
           {showTracker && (
-            <div className="sticky top-[65px] z-30 border-b border-slate-200 bg-[#F9FAFB]/90 backdrop-blur lg:top-0">
-              <div className="mx-auto max-w-6xl px-4 py-4 sm:px-6 sm:py-6">
+            <div className="sticky top-0 z-30 border-b border-slate-200 bg-[#F9FAFB]/90 backdrop-blur">
+              <div className="mx-auto max-w-[1600px] px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
                 <PipelineTracker current={currentStep} />
               </div>
             </div>

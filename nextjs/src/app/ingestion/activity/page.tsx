@@ -9,12 +9,12 @@ import {
 import clsx from "clsx";
 import { useEffect, useMemo, useState } from "react";
 import { PipelineShell } from "@/components/PipelineShell";
-import { StageHero } from "@/components/StageHero";
 import {
   readUploadHistory,
   writeUploadHistory,
   type UploadHistoryItem,
 } from "@/lib/upload-history";
+import { formatBytes } from "@/lib/format";
 
 const statusStyles = {
   uploading: {
@@ -24,8 +24,8 @@ const statusStyles = {
   },
   success: {
     label: "Accepted",
-    className: "bg-emerald-50 text-emerald-700",
-    dot: "bg-emerald-500",
+    className: "bg-primary-soft text-primary",
+    dot: "bg-primary",
   },
   error: {
     label: "Error",
@@ -36,15 +36,6 @@ const statusStyles = {
   UploadHistoryItem["status"],
   { label: string; className: string; dot: string }
 >;
-
-const formatBytes = (bytes: number) => {
-  if (!Number.isFinite(bytes)) return "—";
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  const index = Math.floor(Math.log(bytes) / Math.log(1024));
-  const value = bytes / Math.pow(1024, index);
-  return `${value.toFixed(value > 9 || index === 0 ? 0 : 1)} ${units[index]}`;
-};
 
 export default function UploadActivityPage() {
   const [uploads, setUploads] = useState<UploadHistoryItem[]>([]);
@@ -132,28 +123,29 @@ export default function UploadActivityPage() {
   };
 
   return (
-    <PipelineShell currentStep="ingestion" breadcrumbExtra="Upload Activity" showTracker={false}>
-      <StageHero
-        title="Upload activity"
-        description="Review previous uploads, download payloads, and inspect metadata captured during ingestion."
-      />
+    <PipelineShell currentStep="ingestion">
+      <div className="p-4 lg:p-8 max-w-6xl mx-auto">
+        <div className="mb-6 lg:mb-8">
+          <h1 className="text-2xl lg:text-3xl font-bold text-black">Activity</h1>
+          <p className="text-xs sm:text-sm font-medium text-slate-500 mt-1">
+            Review and manage your recently processed files.
+          </p>
+        </div>
 
-      <main className="mx-auto grid max-w-[1600px] gap-6 px-4 py-6 sm:px-6 sm:py-10 lg:grid-cols-[1.4fr_1fr] lg:px-8">
-        <section className="rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm overflow-hidden">
-          <div className="flex items-center justify-between gap-3">
+      <main className="mx-auto grid gap-6 lg:gap-8 lg:grid-cols-[1fr_400px] items-start">
+        <section className="rounded-3xl border border-slate-200 bg-white shadow-sm flex flex-col h-[500px] lg:h-auto lg:min-h-[600px] overflow-hidden">
+          <div className="p-5 lg:p-6 border-b border-slate-100 flex items-center justify-between gap-3">
             <div>
-              <p className="text-xs uppercase tracking-wide text-slate-400">Upload history</p>
-              <h2 className="text-lg font-semibold text-slate-900">Recent files</h2>
+              <h2 className="text-lg font-bold text-gray-900">Upload History</h2>
+              <p className="text-xs text-gray-500">Recently processed files and datasets</p>
             </div>
-            <div className="flex items-center gap-2 rounded-full bg-slate-50 px-3 py-1 text-xs text-slate-600">
-              <InboxStackIcon className="size-4 text-slate-500" />
-              {uploads.length
-                ? `${Math.min(uploads.length, 25)} tracked`
-                : "No uploads tracked yet"}
+            <div className="flex items-center gap-2 rounded-full bg-gray-50 px-3 py-1 text-xs font-bold text-gray-600 border border-gray-100">
+              <InboxStackIcon className="size-4 text-gray-400" />
+              {uploads.length} tracked
             </div>
           </div>
 
-          <div className="mt-6 space-y-4">
+          <div className="p-4 lg:p-6 space-y-4 overflow-y-auto custom-scrollbar flex-1">
             {uploads.length === 0 && (
               <div className="rounded-2xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-500">
                 Uploads will appear here once you submit files from the ingestion screen.
@@ -169,7 +161,7 @@ export default function UploadActivityPage() {
                   className={clsx(
                     "rounded-2xl border px-4 py-3 transition",
                     isActive
-                      ? "border-slate-900 bg-slate-900/[0.04] shadow-[0_18px_35px_rgba(15,23,42,0.08)]"
+                      ? "border-primary bg-primary/[0.04] shadow-[0_18px_35px_rgba(22,163,74,0.08)]"
                       : "border-slate-100 bg-slate-50 hover:border-slate-300",
                   )}
                 >
@@ -207,7 +199,7 @@ export default function UploadActivityPage() {
                       onClick={() => handleDownloadUpload(upload)}
                       disabled={downloading}
                       className={clsx(
-                        "inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold text-slate-900 transition hover:bg-slate-900/10",
+                        "inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold text-slate-900 transition hover:bg-primary/10",
                         downloading && "cursor-wait opacity-60",
                       )}
                     >
@@ -217,7 +209,7 @@ export default function UploadActivityPage() {
                     <button
                       type="button"
                       onClick={() => handleDeleteUpload(upload.id)}
-                      className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold text-slate-900 transition hover:bg-slate-900/10"
+                      className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold text-slate-900 transition hover:bg-primary/10"
                     >
                       <TrashIcon className="size-4" />
                       Delete
@@ -229,19 +221,16 @@ export default function UploadActivityPage() {
           </div>
         </section>
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-wide text-slate-400">File metadata</p>
-              <h3 className="text-lg font-semibold text-slate-900">
-                {activeUpload ? activeUpload.name : "Select an upload"}
+        <section className="rounded-3xl border border-slate-200 bg-white p-6 lg:p-8 shadow-sm lg:sticky lg:top-24">
+          <div className="flex flex-col gap-1 mb-6 lg:mb-8">
+              <h3 className="text-lg lg:text-xl font-bold text-slate-900">
+                {activeUpload ? "File Metadata" : "Details"}
               </h3>
-            </div>
-            {activeUpload && (
-              <span className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">
-                {activeUpload.source}
-              </span>
-            )}
+              {activeUpload && (
+                <p className="text-xs font-bold text-primary uppercase tracking-widest">
+                  {activeUpload.name}
+                </p>
+              )}
           </div>
 
           {activeUpload ? (
@@ -293,17 +282,11 @@ export default function UploadActivityPage() {
                 </div>
                 <div>
                   <dt className="text-xs uppercase tracking-wide text-slate-400">Backend status</dt>
-                  <dd className="text-sm font-semibold text-slate-900">
+                  <dd className="text-sm font-semibold text-slate-900 break-all">
                     {activeUpload.backendStatus ?? "—"}
                   </dd>
                 </div>
               </dl>
-              {activeUpload.backendMessage && (
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-700">
-                  <p className="text-xs uppercase tracking-wide text-slate-400">Backend message</p>
-                  <p className="mt-1">{activeUpload.backendMessage}</p>
-                </div>
-              )}
             </div>
           ) : (
             <div className="mt-10 rounded-2xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-500">
@@ -312,6 +295,7 @@ export default function UploadActivityPage() {
           )}
         </section>
       </main>
+      </div>
     </PipelineShell>
   );
 }

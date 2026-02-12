@@ -5,13 +5,12 @@ import {
   CheckCircleIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  ExclamationCircleIcon,
-  InboxStackIcon,
-  MagnifyingGlassIcon,
-  DocumentIcon,
+  CircleStackIcon,
+  CodeBracketIcon,
+  CubeIcon,
   DocumentTextIcon,
-  Square2StackIcon,
-  TableCellsIcon,
+  ExclamationCircleIcon,
+  MagnifyingGlassIcon,
 } from "@heroicons/react/24/outline";
 import clsx from "clsx";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -31,17 +30,8 @@ import {
 import type { ExtractionSnapshot } from "@/lib/extraction-snapshot";
 import { readClientSnapshot } from "@/lib/client/snapshot-store";
 import { PipelineShell } from "@/components/PipelineShell";
-import { StageHero } from "@/components/StageHero";
 import { describeSourceLabel, inferSourceType, pickString } from "@/lib/source";
-
-const formatBytes = (bytes: number) => {
-  if (!Number.isFinite(bytes)) return "—";
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  const index = Math.floor(Math.log(bytes) / Math.log(1024));
-  const value = bytes / Math.pow(1024, index);
-  return `${value.toFixed(value > 9 || index === 0 ? 0 : 1)} ${units[index]}`;
-};
+import { formatBytes } from "../../lib/format";
 
 const safeJsonParse = (value: string | undefined) => {
   if (!value) return null;
@@ -62,10 +52,10 @@ const FeedbackPill = ({ feedback }: { feedback: Feedback }) => {
   const className = clsx(
     "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold",
     feedback.state === "success"
-      ? "bg-slate-100 text-slate-900 border border-slate-200"
+      ? "bg-primary-soft text-primary"
       : feedback.state === "error"
-        ? "bg-slate-50 text-slate-500 border border-slate-200"
-        : "bg-slate-50 text-slate-600",
+        ? "bg-rose-50 text-rose-700"
+        : "bg-primary-soft text-primary",
   );
   const Icon =
     feedback.state === "loading"
@@ -131,6 +121,10 @@ const extractItemsFromBackend = (payload: unknown): unknown[] => {
       payload.records,
       payload.data,
       payload.payload,
+      payload.cleansedItems,
+      payload.originalItems,
+      payload.result,
+      payload.body,
       payload.cleansedItems,
       payload.originalItems,
       payload.result,
@@ -228,6 +222,7 @@ export default function ExtractionPage() {
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [previewMode, setPreviewMode] = useState<"structured" | "raw">("structured");
   const [feedback, setFeedback] = useState<Feedback>({ state: "idle" });
   const [sending, setSending] = useState(false);
   const [nodeMap, setNodeMap] = useState<Map<string, TreeNode>>(new Map());
@@ -235,7 +230,17 @@ export default function ExtractionPage() {
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [snapshotVersion, setSnapshotVersion] = useState(0);
-  const [previewMode, setPreviewMode] = useState<"structured" | "raw">("structured");
+
+  const [openSections, setOpenSections] = useState<Set<string>>(new Set(["structure", "preview"]));
+
+  const toggleSection = (section: string) => {
+    setOpenSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(section)) next.delete(section);
+      else next.add(section);
+      return next;
+    });
+  };
 
   useEffect(() => {
     setHydrated(true);
@@ -256,8 +261,25 @@ export default function ExtractionPage() {
 
   const hydrateStructure = useCallback(
     (tree?: TreeNode[], rawJson?: string) => {
+      const getRootName = () => {
+        const payload = loadExtractionContext();
+        return payload?.metadata?.name || "Content.JSON";
+      };
+
       if (tree && tree.length) {
-        applyTreeFromNodes(tree);
+        // If it's already wrapped, don't wrap again
+        if (tree.length === 1 && tree[0].id === "root") {
+          applyTreeFromNodes(tree);
+        } else {
+          const rootNode: TreeNode = {
+            id: "root",
+            label: getRootName(),
+            path: "root",
+            type: "object",
+            children: tree,
+          };
+          applyTreeFromNodes([rootNode]);
+        }
         setParsedJson(rawJson ? safeJsonParse(rawJson) : null);
         return;
       }
@@ -266,9 +288,16 @@ export default function ExtractionPage() {
         const parsed = safeJsonParse(rawJson);
         setParsedJson(parsed);
         if (parsed) {
-          const nodes = buildTreeFromJson(parsed, [], { value: 0 });
+          const nodes = buildTreeFromJson(parsed, ["root"], { value: 0 });
           if (nodes.length) {
-            applyTreeFromNodes(nodes);
+            const rootNode: TreeNode = {
+              id: "root",
+              label: getRootName(),
+              path: "root",
+              type: "object",
+              children: nodes,
+            };
+            applyTreeFromNodes([rootNode]);
           } else {
             setTreeNodes([]);
             setNodeMap(new Map<string, TreeNode>());
@@ -401,54 +430,85 @@ export default function ExtractionPage() {
     });
   };
 
-  const renderTree = (nodes: TreeNode[], depth = 0) =>
+  const renderTree = (nodes: TreeNode[], level = 0) =>
     nodes.map((node) => {
       const hasChildren = Boolean(node.children?.length);
       const expanded = expandedNodes.has(node.id);
       const selected = activeNodeId === node.id;
-
-      // Hierarchical Icons
-      const Icon = hasChildren
-        ? depth === 0
-          ? Square2StackIcon
-          : TableCellsIcon
-        : DocumentIcon;
+      const isRoot = node.id === "root";
 
       return (
-        <div key={node.id} className="space-y-1">
-          <button
-            type="button"
+        <div key={node.id} className="select-none">
+          <div
+            className={clsx(
+              "group flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-primary-soft/30 cursor-pointer transition-colors",
+              selected && "bg-primary-soft/70",
+              isRoot && "bg-primary-soft/20 mb-2",
+              level > 0 && !isRoot && "ml-2 sm:ml-4",
+            )}
             onClick={() => {
               setActiveNodeId(node.id);
               if (hasChildren) toggleNode(node.id);
             }}
-            className={clsx(
-              "group flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left transition-all",
-              selected ? "bg-black text-white shadow-md" : "text-slate-600 hover:bg-slate-50",
-            )}
           >
             {hasChildren ? (
-              <span className={clsx(selected ? "text-white" : "text-slate-400")}>
-                {expanded ? (
-                  <ChevronDownIcon className="size-3.5" />
-                ) : (
-                  <ChevronRightIcon className="size-3.5" />
+              <ChevronDownIcon
+                className={clsx(
+                  "size-3 text-gray-400 transition-transform",
+                  !expanded && "-rotate-90",
                 )}
-              </span>
+              />
             ) : (
-              <span className="size-3.5" />
+              <div className="size-3" />
             )}
-            <Icon
-              className={clsx(
-                "size-4 shrink-0",
-                selected ? "text-white" : "text-slate-400 group-hover:text-black",
-              )}
-            />
-            <span className="truncate text-sm font-semibold">{node.label}</span>
-          </button>
+
+            {isRoot ? (
+              <div className="flex items-center gap-2 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <div className="size-4 rounded bg-primary flex items-center justify-center">
+                    <CheckCircleIcon className="size-3 text-white" />
+                  </div>
+                  <div className="p-1 rounded bg-purple-100 text-purple-600">
+                    <CodeBracketIcon className="size-3.5" />
+                  </div>
+                </div>
+                <span className="text-sm font-semibold text-gray-900">{node.label}</span>
+              </div>
+            ) : (
+              <>
+                <input
+                  type="checkbox"
+                  className="size-3.5 rounded border-gray-300 text-primary focus:ring-primary"
+                  checked={true}
+                  readOnly
+                  onClick={(e) => e.stopPropagation()}
+                />
+
+                {hasChildren ? (
+                  <CircleStackIcon className="size-4 text-primary" />
+                ) : (
+                  <CubeIcon className="size-4 text-gray-400" />
+                )}
+
+                <span
+                  className={clsx(
+                    "text-sm flex-1",
+                    selected ? "text-primary font-bold" : "text-gray-700",
+                  )}
+                >
+                  {node.label}
+                </span>
+                {!hasChildren && (
+                  <span className="text-[10px] text-gray-400 font-mono uppercase px-1.5 py-0.5 bg-gray-100 rounded">
+                    string
+                  </span>
+                )}
+              </>
+            )}
+          </div>
           {hasChildren && expanded && (
-            <div className="ml-4 border-l border-slate-100 pl-2">
-              {renderTree(node.children!, depth + 1)}
+            <div className={clsx("mt-0.5 border-l border-gray-100", isRoot ? "ml-2 sm:ml-4" : "ml-1 sm:ml-1.5")}>
+              {renderTree(node.children!, level + 1)}
             </div>
           )}
         </div>
@@ -512,7 +572,12 @@ export default function ExtractionPage() {
       });
 
       if (response.ok) {
-        router.push("/cleansing");
+        const idToPass = context.metadata.cleansedId ?? payload.body?.cleansedId;
+        if (idToPass) {
+          router.push(`/cleansing?id=${encodeURIComponent(idToPass)}`);
+        } else {
+          router.push("/cleansing");
+        }
       }
     } catch (error) {
       setFeedback({
@@ -539,23 +604,23 @@ export default function ExtractionPage() {
 
   if (!context) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <div className="rounded-3xl border border-slate-200 bg-white p-10 shadow-sm">
-          <p className="text-lg font-semibold text-slate-900">
-            Extraction context not found.
-          </p>
-          <p className="mt-2 text-sm text-slate-500">
-            Start from the ingestion page to select a file or payload.
-          </p>
-          <button
-            type="button"
-            onClick={() => router.push("/ingestion")}
-            className="mt-6 rounded-full bg-slate-900 px-6 py-2 text-sm font-semibold text-white"
-          >
-            Back to Ingestion
-          </button>
+      <PipelineShell currentStep="extraction" showTracker={false}>
+        <div className="flex h-[calc(100vh-64px)] items-center justify-center bg-gray-50/50 p-8">
+          <div className="max-w-md w-full rounded-2xl border border-gray-200 bg-white p-10 text-center shadow-sm">
+            <h2 className="text-xl font-bold text-gray-900">Extraction context not found</h2>
+            <p className="mt-4 text-sm text-gray-500">
+              Start from the ingestion page to select a file or payload.
+            </p>
+            <button
+              type="button"
+              onClick={() => router.push("/ingestion")}
+              className="mt-8 btn-primary w-full"
+            >
+              Back to Ingestion
+            </button>
+          </div>
         </div>
-      </div>
+      </PipelineShell>
     );
   }
 
@@ -567,219 +632,285 @@ export default function ExtractionPage() {
     context.metadata.sourceIdentifier ?? context.metadata.source ?? "—";
 
   return (
-    <PipelineShell currentStep="extraction" breadcrumbExtra={context.metadata.name}>
-      <StageHero
-        title="Extraction"
-        description="Data extracted and converted to JSON format (Postgres/Neon)."
-        actionsSlot={<FeedbackPill feedback={feedback} />}
-      />
-
-      <main className="mx-auto flex max-w-[1600px] flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
-        <div className="grid h-auto lg:h-[calc(100vh-20rem)] lg:min-h-[600px] gap-6 lg:grid-cols-[280px_1fr_280px]">
-          {/* Left Pane: File Structure */}
-          <section className="flex flex-col rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm overflow-hidden max-h-[400px] lg:max-h-none">
-            <div className="flex items-center justify-between mb-4 sm:mb-6">
-              <h3 className="text-[10px] sm:text-sm font-bold uppercase tracking-widest text-slate-400">
-                File Structure
-              </h3>
-            </div>
-
-            <div className="relative mb-6">
-              <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
-              <input
-                type="search"
-                placeholder="Search..."
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                className="w-full rounded-xl border border-slate-100 bg-slate-50 py-2.5 pl-10 pr-4 text-sm text-black focus:border-black focus:bg-white focus:outline-none transition-all"
-              />
-            </div>
-
-            <div className="flex-1 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
-              {snapshotLoading && context?.snapshotId && (
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 py-12 text-center text-sm text-slate-400 animate-pulse">
-                  Loading structure...
-                </div>
-              )}
-              {!snapshotLoading && filteredTree.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-200 py-12 text-center text-sm text-slate-400">
-                  No matches found.
-                </div>
-              ) : (
-                <div className="space-y-1">{renderTree(filteredTree)}</div>
-              )}
-            </div>
-          </section>
-
-          {/* Center Pane: Data Preview */}
-          <section className="flex flex-col rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden min-h-[400px]">
-            <div className="flex items-center justify-between border-b border-slate-100 p-4 sm:p-6">
-              <div className="flex items-center gap-3 sm:gap-4">
-                <div className="flex size-8 sm:size-10 items-center justify-center rounded-lg sm:rounded-xl bg-slate-50 text-black">
-                  <Square2StackIcon className="size-4 sm:size-5" />
-                </div>
-                <div>
-                  <h2 className="text-sm sm:text-lg font-bold text-black leading-none truncate max-w-[120px] sm:max-w-none">
-                    {activeNode?.label ?? "Select a node"}
-                  </h2>
-                  <p className="mt-1 sm:mt-1.5 text-[10px] sm:text-xs font-medium text-slate-400 truncate max-w-[120px] sm:max-w-none">
-                    {activeNode?.path ?? "Choose an item from the structure"}
-                  </p>
-                </div>
+    <PipelineShell currentStep="extraction">
+      <div className="min-h-[calc(100vh-4rem)] bg-background">
+        <section className="border-b border-slate-200 bg-white">
+          <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-3 px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between text-left">
+              <div className="space-y-1 sm:space-y-2">
+                <h1 className="text-2xl sm:text-3xl font-bold text-black">Extraction</h1>
+                <p className="text-xs sm:text-sm font-medium text-slate-500 lg:max-w-2xl">
+                  Inspect the source JSON structure and preview individual field values before proceeding.
+                </p>
               </div>
-
-              <div className="flex items-center rounded-xl bg-slate-100 p-1">
+              <div className="flex flex-col sm:flex-row items-center justify-center lg:justify-end gap-4">
+                <FeedbackPill feedback={feedback} />
                 <button
-                  onClick={() => setPreviewMode("raw")}
-                  className={clsx(
-                    "rounded-lg px-4 py-1.5 text-xs font-bold transition-all",
-                    previewMode === "raw" ? "bg-white text-black shadow-sm" : "text-slate-500",
-                  )}
+                  onClick={sendToCleansing}
+                  disabled={sending}
+                  className="w-full sm:w-auto rounded-full bg-primary px-8 py-3 text-sm font-semibold text-white transition hover:bg-accent flex items-center justify-center gap-2 shadow-lg"
                 >
-                  Raw
-                </button>
-                <button
-                  onClick={() => setPreviewMode("structured")}
-                  className={clsx(
-                    "rounded-lg px-4 py-1.5 text-xs font-bold transition-all",
-                    previewMode === "structured" ? "bg-white text-black shadow-sm" : "text-slate-500",
-                  )}
-                >
-                  Structured
+                  <span className="whitespace-nowrap">{sending ? "Processing..." : "Continue"}</span>
+                  <ChevronRightIcon className="size-4 shrink-0" />
                 </button>
               </div>
             </div>
+          </div>
+        </section>
 
-            <div className="flex-1 overflow-y-auto p-6 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
-              {previewMode === "structured" ? (
-                <div className="rounded-2xl border border-slate-100 overflow-hidden">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-slate-50 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                      <tr>
-                        <th className="px-6 py-4">Field Name</th>
-                        <th className="px-6 py-4">Field Value</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 bg-white">
-                      {activeNode && (
-                        <tr className="bg-slate-50/30">
-                          <td className="px-6 py-5 font-bold text-black">{activeNode.label}</td>
-                          <td className="px-6 py-5 text-slate-600 italic">
-                            {activeValue === undefined
-                              ? "—"
-                              : typeof activeValue === "object"
-                                ? Array.isArray(activeValue)
-                                  ? `Array (${activeValue.length} items)`
-                                  : "Object"
-                                : String(activeValue)}
-                          </td>
-                        </tr>
-                      )}
-                      {activeNode?.children?.map((child) => {
-                        const rawChildValue = parsedJson ? getValueAtPath(parsedJson, child.path.replace(/^[^\.]+\.?/, "")) : undefined;
-                        const childValue = child.value !== undefined ? child.value : rawChildValue;
-
-                        return (
-                          <tr key={child.id}>
-                            <td className="px-6 py-5 font-bold text-black">{child.label}</td>
-                            <td className="px-6 py-5 text-slate-600">
-                              {childValue === undefined
-                                ? "—"
-                                : typeof childValue === "object"
-                                  ? Array.isArray(childValue)
-                                    ? `Array (${childValue.length} items)`
-                                    : "Object"
-                                  : String(childValue)}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                      {!activeNode && (
-                        <tr>
-                          <td colSpan={2} className="px-6 py-10 text-center text-slate-400 italic">
-                            Select an item from the file structure to view details
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="h-full rounded-2xl bg-slate-900 p-6 shadow-inner">
-                  <pre className="h-full overflow-auto text-sm font-mono text-slate-300 leading-relaxed scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
-                    {activeValue === undefined
-                      ? "// Select a node to view raw content"
-                      : JSON.stringify(activeValue, null, 2)}
-                  </pre>
-                </div>
-              )}
-            </div>
-
-            <div className="p-6 bg-white border-t border-slate-100 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                  Status
-                </span>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-900 border border-slate-200">
-                  <span className="size-1 rounded-full bg-black" />
-                  Extracted
-                </span>
+        <main className="mx-auto grid max-w-[1600px] gap-6 px-4 py-6 sm:px-6 sm:py-8 lg:grid-cols-12 items-stretch">
+          {/* File Structure */}
+          <div className="lg:col-span-3 bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col lg:h-[calc(100vh-22rem)] lg:min-h-[600px]">
+            <button
+              type="button"
+              onClick={() => toggleSection("structure")}
+              className="w-full flex items-center justify-between p-6 text-left lg:pointer-events-none shrink-0"
+            >
+              <h2 className="text-lg font-bold">File Structure</h2>
+              <div className="lg:hidden">
+                {openSections.has("structure") ? (
+                  <ChevronDownIcon className="size-5 text-slate-400" />
+                ) : (
+                  <ChevronRightIcon className="size-5 text-slate-400" />
+                )}
               </div>
+            </button>
+
+            <div className={clsx(
+              "flex-col flex-1 min-h-0",
+              openSections.has("structure") ? "flex" : "hidden lg:flex"
+            )}>
+              <div className="px-6 pb-6 border-b border-slate-100 shrink-0">
+                <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-primary/10 rounded-lg">
+                      <CheckCircleIcon className="size-6 text-primary" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-semibold text-sm truncate max-w-[100px]">{context.metadata.name}</span>
+                        <CheckCircleIcon className="size-4 text-primary" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-6 flex-1 flex flex-col min-h-0">
+                <div className="relative mb-6 flex-shrink-0">
+                  <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Search fields..."
+                    className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl text-base lg:text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+
+                <div className="flex-1 overflow-auto pr-2 custom-scrollbar min-h-0">
+                  <div className="min-w-max pb-4">
+                    {snapshotLoading && context?.snapshotId && (
+                      <div className="py-10 text-center text-sm text-gray-400">Loading structure...</div>
+                    )}
+                    {filteredTree.length === 0 ? (
+                      <div className="py-10 text-center text-sm text-gray-400">No structure available</div>
+                    ) : (
+                      renderTree(filteredTree)
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="lg:col-span-6 flex flex-col">
+            {/* Data Preview */}
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col lg:h-[calc(100vh-22rem)] lg:min-h-[600px]">
               <button
                 type="button"
-                onClick={sendToCleansing}
-                disabled={sending}
-                className={clsx(
-                  "rounded-xl bg-black px-8 py-3 text-xs font-bold uppercase tracking-widest text-white shadow-lg shadow-black/20 transition-all hover:bg-slate-800 active:scale-95",
-                  sending && "cursor-not-allowed opacity-60",
-                )}
+                onClick={() => toggleSection("preview")}
+                className="w-full flex items-center justify-between p-6 text-left lg:pointer-events-none"
               >
-                {sending ? "Processing..." : "Send to Cleansing"}
-              </button>
-            </div>
-          </section>
-
-          {/* Right Pane: File Metadata */}
-          <section className="flex flex-col rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm">
-            <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-6">
-              File Metadata
-            </h3>
-
-            <div className="space-y-6 flex-1">
-              {[
-                { label: "Locale", value: context.metadata.locale ?? "—" },
-                { label: "Page ID", value: context.metadata.pageId ?? "—" },
-                { label: "Name", value: context.metadata.name },
-                { label: "Size", value: formatBytes(context.metadata.size) },
-                { label: "Source Type", value: sourceLabel },
-                { label: "Uploaded", value: new Date(context.metadata.uploadedAt).toLocaleString() },
-              ].map((item) => (
-                <div key={item.label} className="group">
-                  <dt className="text-[10px] font-bold uppercase tracking-widest text-slate-400 transition-colors group-hover:text-black">
-                    {item.label}
-                  </dt>
-                  <dd className="mt-1.5 text-sm font-bold text-black break-all">
-                    {item.value}
-                  </dd>
+                <h2 className="text-lg font-bold">Data Preview</h2>
+                <div className="lg:hidden">
+                  {openSections.has("preview") ? (
+                    <ChevronDownIcon className="size-5 text-slate-400" />
+                  ) : (
+                    <ChevronRightIcon className="size-5 text-slate-400" />
+                  )}
                 </div>
-              ))}
-            </div>
+              </button>
 
-            <div className="mt-8 pt-6 border-t border-slate-100">
+              <div className={clsx(
+                "flex-col flex-1 min-h-0",
+                openSections.has("preview") ? "flex" : "hidden lg:flex"
+              )}>
+                <div className="px-6 pb-6 border-b border-slate-100 flex items-center justify-between bg-white">
+                  <div className="flex p-1 bg-slate-100 rounded-lg">
+                    <button
+                      onClick={() => setPreviewMode("structured")}
+                      className={clsx(
+                        "flex items-center gap-2 px-4 py-1.5 text-xs font-semibold rounded-md transition-all",
+                        previewMode === "structured" ? "bg-white shadow-sm text-gray-900" : "text-gray-500 hover:text-gray-700"
+                      )}
+                    >
+                      Structured
+                    </button>
+                    <button
+                      onClick={() => setPreviewMode("raw")}
+                      className={clsx(
+                        "flex items-center gap-2 px-4 py-1.5 text-xs font-semibold rounded-md transition-all",
+                        previewMode === "raw" ? "bg-white shadow-sm text-gray-900" : "text-gray-500 hover:text-gray-700"
+                      )}
+                    >
+                      Raw
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-4 lg:p-6 bg-slate-50/50 flex-1 flex flex-col overflow-hidden min-h-0">
+                  <div className="flex items-center gap-2 text-xs font-medium text-gray-500 mb-4">
+                    <span className="truncate max-w-[150px]">{context.metadata.name}</span>
+                    {activeNode && (
+                      <>
+                        <ChevronRightIcon className="size-3" />
+                        <span className="truncate max-w-[150px]">{activeNode.label}</span>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="flex-1 bg-white rounded-xl border border-gray-200 overflow-hidden text-sm min-h-0">
+                    <div className="h-full overflow-y-auto custom-scrollbar">
+                      {previewMode === "raw" ? (
+                        <div className="p-6 font-mono">
+                          <pre className="text-gray-800">
+                            {activeValue === undefined
+                              ? "/* Select a field to see its raw value */"
+                              : typeof activeValue === "object"
+                                ? JSON.stringify(activeValue, null, 2)
+                                : String(activeValue)}
+                          </pre>
+                        </div>
+                      ) : (
+                        <div className="h-full flex flex-col">
+                          {activeNode ? (
+                            <table className="w-full text-left border-collapse">
+                              <thead className="sticky top-0 bg-gray-50 shadow-sm z-10">
+                                <tr>
+                                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider border-b border-gray-100">
+                                    Field Name
+                                  </th>
+                                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider border-b border-gray-100">
+                                    Value
+                                  </th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-50">
+                                {(() => {
+                                  const getNodesToDisplay = () => {
+                                    if (!activeNode) return [];
+                                    if (activeNode.children && activeNode.children.length > 0) {
+                                      return activeNode.children;
+                                    }
+                                    return [activeNode];
+                                  };
+
+                                  const nodesToDisplay = getNodesToDisplay();
+
+                                  return nodesToDisplay.map((node) => {
+                                    const val =
+                                      "value" in node
+                                        ? node.value
+                                        : getValueAtPath(
+                                            parsedJson,
+                                            node.path.replace(/^[^\.]+\.?/, ""),
+                                          );
+
+                                    return (
+                                      <tr key={node.id} className="hover:bg-gray-50/50">
+                                        <td className="px-6 py-4 font-medium text-gray-700">
+                                          {node.label}
+                                        </td>
+                                        <td className="px-6 py-4 text-gray-600 break-all max-w-xs">
+                                          {val === undefined
+                                            ? "—"
+                                            : typeof val === "object"
+                                              ? JSON.stringify(val)
+                                              : String(val)}
+                                        </td>
+                                      </tr>
+                                    );
+                                  });
+                                })()}
+                              </tbody>
+                            </table>
+                          ) : (
+                            <div className="flex-1 flex items-center justify-center text-gray-400 italic">
+                              Select a field to preview data
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* File Metadata Sidebar */}
+          <div className="lg:col-span-3 bg-white rounded-3xl border border-slate-200 p-6 shadow-sm lg:h-[calc(100vh-22rem)] lg:min-h-[600px] overflow-y-auto custom-scrollbar">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-lg font-bold">Metadata</h2>
               <button
                 type="button"
                 onClick={() => {
                   clearExtractionContext();
                   router.push("/ingestion");
                 }}
-                className="w-full rounded-xl border border-slate-200 py-3 text-xs font-bold uppercase tracking-widest text-slate-400 hover:border-black hover:text-black transition-all"
+                className="text-[10px] font-bold text-primary hover:underline uppercase tracking-wider"
               >
-                Start Over
+                Reset
               </button>
             </div>
-          </section>
-        </div>
-      </main>
+            <div className="space-y-6">
+              <div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Name</p>
+                <p className="text-sm font-bold text-gray-900 break-all">{context.metadata.name}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Source</p>
+                <p className="text-sm font-bold text-gray-900">{sourceLabel}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Identifier</p>
+                <p className="text-sm font-bold text-gray-900 break-all">{sourceIdentifier}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Size</p>
+                  <p className="text-sm font-bold text-gray-900">{formatBytes(context.metadata.size)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Locale</p>
+                  <p className="text-sm font-bold text-gray-900">{context.metadata.locale ?? "—"}</p>
+                </div>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Page ID</p>
+                <p className="text-sm font-bold text-gray-900 break-all">{context.metadata.pageId ?? "—"}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Uploaded</p>
+                <p className="text-[11px] font-bold text-gray-900">
+                  {new Date(context.metadata.uploadedAt).toLocaleString()}
+                </p>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
     </PipelineShell>
   );
 }

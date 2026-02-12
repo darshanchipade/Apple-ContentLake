@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useState } from "react";
-import { StageHero } from "@/components/StageHero";
 import { PipelineShell } from "@/components/PipelineShell";
 import {
   SearchInterface,
@@ -217,14 +216,10 @@ export default function SearchPage() {
 
   return (
     <PipelineShell currentStep="ingestion" showTracker={false}>
-      <StageHero
-        title="Search Finder"
-        description="Explore Content Lake with AI-powered refinements fed by the Spring Boot search controller."
-      />
-
-      <main className="mx-auto max-w-[1600px] px-4 py-6 sm:px-6 sm:py-10 lg:px-8">
-        <div className="rounded-3xl border border-slate-200 bg-white px-4 py-8 shadow-sm sm:px-10 lg:px-16 overflow-hidden">
-          <div className="flex justify-end gap-3 sm:gap-4 text-xs sm:text-sm font-semibold text-[#000000]">
+      <main className="mx-auto max-w-6xl p-4 lg:p-8">
+        <div className="mb-8"><h1 className="text-2xl lg:text-3xl font-bold">Search</h1></div>
+        <div className="card px-4 py-8 lg:px-16 lg:py-12">
+          <div className="flex justify-end gap-4 text-sm font-semibold text-primary">
             <a href="/ingestion" className="hover:underline">
               Upload JSON
             </a>
@@ -251,7 +246,7 @@ export default function SearchPage() {
 
             {isLoadingSuggestions && <p className="text-sm text-slate-500">Loading suggestions…</p>}
             {refineError && (
-              <p className="text-sm text-slate-600" role="alert">
+              <p className="text-sm text-rose-600" role="alert">
                 {refineError}
               </p>
             )}
@@ -265,7 +260,7 @@ export default function SearchPage() {
             )}
 
             {searchError && (
-              <p className="text-sm text-slate-600" role="alert">
+              <p className="text-sm text-rose-600" role="alert">
                 {searchError}
               </p>
             )}

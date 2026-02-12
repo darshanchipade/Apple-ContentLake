@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { PipelineShell } from "@/components/PipelineShell";
-import { StageHero } from "@/components/StageHero";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -31,7 +30,7 @@ function MessageBubble({ role, content }: ChatMessage) {
   return (
     <div className={`flex w-full ${isUser ? "justify-end" : "justify-start"}`}>
       <div
-        className={`${isUser ? "bg-blue-600 text-white" : "bg-white text-[#111215]"} max-w-[80%] rounded-2xl px-4 py-3 shadow`}
+        className={`${isUser ? "bg-primary text-white" : "bg-white text-[#111215]"} max-w-[80%] rounded-2xl px-4 py-3 shadow`}
       >
         {isJson ? (
           <div className="flex flex-col gap-2">
@@ -118,16 +117,14 @@ export default function ChatbotPage() {
 
   return (
     <PipelineShell currentStep="ingestion" showTracker={false}>
-      <StageHero
-        title="Chatbot"
-        description="Ask natural-language questions about your content. Responses stream from the Spring Boot ChatBotController."
-      />
+      <div className="p-4 lg:p-8 max-w-[1600px] mx-auto">
+        <div className="mb-8"><h1 className="text-2xl lg:text-3xl font-bold">Chatbot</h1></div>
 
-      <main className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 sm:py-10 lg:px-8">
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 rounded-3xl border border-slate-200 bg-white px-4 py-6 shadow-sm md:px-8">
+      <main className="mx-auto w-full max-w-[1600px]">
+        <div className="flex flex-col gap-4 card px-4 py-6 lg:px-8">
           <div className="flex items-center justify-between">
-            <h2 className="text-2xl font-semibold text-[#111215]">Chatbot</h2>
-            <a href="/search" className="text-sm font-semibold text-[#2180f9] hover:underline">
+            <h2 className="text-2xl font-semibold text-gray-900">Chatbot</h2>
+            <a href="/search" className="text-sm font-semibold text-primary hover:underline">
               Back to Search
             </a>
           </div>
@@ -155,13 +152,14 @@ export default function ChatbotPage() {
               type="button"
               onClick={() => void send()}
               disabled={isLoading}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+              className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent disabled:opacity-50"
             >
               Send
             </button>
           </div>
         </div>
       </main>
+      </div>
     </PipelineShell>
   );
 }

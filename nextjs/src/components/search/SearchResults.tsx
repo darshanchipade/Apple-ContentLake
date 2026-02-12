@@ -85,12 +85,12 @@ export function SearchResults({ results, isLoading, onFilter }: SearchResultsPro
               key={resultId}
               className="box-border flex flex-col gap-4 rounded-[12px] bg-white p-4 shadow-[0px_0.5px_2.5px_0px_rgba(0,0,0,0.3)]"
             >
-              <div className="flex items-start justify-between gap-4">
-                <div>
+              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                <div className="flex-1 min-w-0">
                   <p className="text-[10px] font-semibold text-[#737780]">Source</p>
                   <p className="text-[12px] font-medium text-[#111215] break-all">{source}</p>
                 </div>
-                <div className="w-[318px] max-w-full">
+                <div className="w-full sm:w-[318px]">
                   <p className="text-[10px] font-semibold text-[#737780]">Section</p>
                   <p className="text-[12px] font-medium text-[#111215] break-all">{section}</p>
                 </div>
@@ -103,8 +103,8 @@ export function SearchResults({ results, isLoading, onFilter }: SearchResultsPro
                   type="button"
                   onClick={() => setActiveTab("raw")}
                   className={clsx(
-                    "mr-[-1px] h-full flex-1 rounded-[5px] text-center text-[13px] leading-[16px] transition-all",
-                    activeTab === "raw" ? "bg-[#111215] text-white" : "bg-transparent text-[#737780] hover:bg-gray-100",
+                    "mr-[-1px] h-full flex-1 rounded-[5px] text-center text-[13px] leading-[16px] transition-all font-bold",
+                    activeTab === "raw" ? "bg-primary text-white" : "bg-transparent text-[#737780] hover:bg-gray-100",
                   )}
                 >
                   Raw
@@ -113,9 +113,9 @@ export function SearchResults({ results, isLoading, onFilter }: SearchResultsPro
                   type="button"
                   onClick={() => setActiveTab("format")}
                   className={clsx(
-                    "mr-[-1px] h-full flex-1 rounded-[5px] text-center text-[13px] leading-[16px] transition-all",
+                    "mr-[-1px] h-full flex-1 rounded-[5px] text-center text-[13px] leading-[16px] transition-all font-bold",
                     activeTab === "format"
-                      ? "bg-[#111215] text-white"
+                      ? "bg-primary text-white"
                       : "bg-transparent text-[#737780] hover:bg-gray-100",
                   )}
                 >
@@ -130,17 +130,17 @@ export function SearchResults({ results, isLoading, onFilter }: SearchResultsPro
                   type="button"
                   onClick={() => copyToClipboard(content, resultId)}
                   className={clsx(
-                    "rounded-[24px] transition-all duration-200",
+                    "relative rounded-[24px] transition-all duration-200",
                     copiedStates[resultId] ? "bg-gray-50" : "bg-white hover:bg-gray-50",
                   )}
                 >
                   <div className="box-border flex items-center gap-1 px-3 py-[3px]">
-                    <CopyIcon className="size-3.5 text-[#111215]" />
-                    <span className="text-[12px] font-medium text-[#111215]">
+                    <CopyIcon className="size-3.5 text-primary" />
+                    <span className="text-[12px] font-bold text-primary">
                       {copiedStates[resultId] ? "Copied" : "Copy"}
                     </span>
                   </div>
-                  <div className="pointer-events-none inset-[-1px] rounded-[25px] border border-black shadow-[0px_1px_2.5px_0px_rgba(0,122,255,0.24),0px_0px_0px_0.5px_rgba(0,122,255,0.12)]" />
+                  <div className="pointer-events-none absolute inset-x-0 -bottom-[1px] h-0.5 bg-primary rounded-full shadow-[0px_1px_4px_rgba(0,113,227,0.3)]" />
                 </button>
               </div>
             </article>

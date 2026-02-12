@@ -46,7 +46,7 @@ export function SearchInterface<TFilter extends SearchFilter>({
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
                   placeholder="Search..."
-                  className="w-full border-none bg-transparent text-[14px] leading-[20px] text-[#4d4d4d] placeholder-[#9aa0a6] outline-none"
+                  className="w-full border-none bg-transparent text-[16px] leading-[20px] text-[#4d4d4d] placeholder-[#9aa0a6] outline-none"
                 />
               </div>
               {searchQuery && (
@@ -64,7 +64,7 @@ export function SearchInterface<TFilter extends SearchFilter>({
           </div>
           <button
             type="submit"
-            className="h-[50px] rounded-[12px] bg-[#000000] px-6 font-semibold text-white shadow transition-colors hover:bg-slate-800"
+            className="h-[50px] rounded-[12px] bg-primary px-6 font-semibold text-white shadow transition-colors hover:bg-primary"
           >
             Search
           </button>
@@ -82,7 +82,7 @@ export function SearchInterface<TFilter extends SearchFilter>({
                 onClick={() => toggleFilter(filter)}
                 className={clsx(
                   "box-border flex items-center justify-center gap-1 rounded-[24px] px-3 py-2 text-[12px] font-medium tracking-[-0.432px] shadow-[0px_1px_2.5px_0px_rgba(0,0,0,0.24),0px_0px_0px_0.5px_rgba(0,0,0,0.12)] transition-all duration-200",
-                  filter.isActive ? "bg-[#000000] text-white" : "bg-white text-[#4d4d4d] hover:bg-gray-50",
+                  filter.isActive ? "bg-primary text-white" : "bg-white text-[#4d4d4d] hover:bg-gray-50",
                 )}
               >
                 {filter.label}

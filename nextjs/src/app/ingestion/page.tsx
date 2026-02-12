@@ -33,7 +33,12 @@ import {
 } from "@/lib/extraction-context";
 import { storeClientSnapshot } from "@/lib/client/snapshot-store";
 import type { ExtractionSnapshot } from "@/lib/extraction-snapshot";
-import { extractLocaleAndPageId, pickLocale, pickPageId } from "@/lib/metadata";
+import {
+  extractLocaleAndPageId,
+  inferLocaleFromFilename,
+  pickLocale,
+  pickPageId,
+} from "@/lib/metadata";
 import { describeSourceLabel, inferSourceType, pickString } from "@/lib/source";
 import {
   readUploadHistory,
@@ -41,6 +46,15 @@ import {
   type UploadHistoryItem,
   type UploadStatus,
 } from "@/lib/upload-history";
+
+const generateId = () => {
+  try {
+    return crypto.randomUUID();
+  } catch (e) {
+    return Math.random().toString(36).substring(2, 15);
+  }
+};
+
 
 type UploadTab = "local" | "api" | "s3";
 
@@ -51,17 +65,17 @@ type ApiFeedback = {
 
 const uploadTabs = [
   {
-    id: "s3" as const,
-    title: "Amazon S3 / Cloud",
-    description: "Ingest directly from s3:// or classpath URIs.",
-    icon: CloudArrowUpIcon,
-    disabled: false,
-  },
-  {
     id: "local" as const,
     title: "Local Upload",
     description: "Upload files directly from your device.",
     icon: ArrowUpTrayIcon,
+    disabled: false,
+  },
+  {
+    id: "s3" as const,
+    title: "Amazon S3",
+    description: "Ingest directly from cloud storage.",
+    icon: CloudArrowUpIcon,
     disabled: false,
   },
   {
@@ -84,8 +98,8 @@ const statusStyles: Record<
   },
   success: {
     label: "Accepted",
-    className: "bg-emerald-50 text-emerald-700",
-    dot: "bg-emerald-500",
+    className: "bg-primary-soft text-primary",
+    dot: "bg-primary",
   },
   error: {
     label: "Error",
@@ -120,7 +134,7 @@ const getFileLabel = (fileName: string) => {
       return { label: "PDF", style: "bg-rose-100 text-rose-700" };
     case "xls":
     case "xlsx":
-      return { label: "XLS", style: "bg-emerald-100 text-emerald-700" };
+      return { label: "XLS", style: "bg-primary-soft text-primary" };
     case "doc":
     case "docx":
       return { label: "DOC", style: "bg-sky-100 text-sky-700" };
@@ -151,10 +165,10 @@ const FeedbackPill = ({ feedback }: { feedback: ApiFeedback }) => {
   const className = clsx(
     "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold",
     feedback.state === "success"
-      ? "bg-emerald-50 text-emerald-700"
+      ? "bg-primary-soft text-primary"
       : feedback.state === "error"
         ? "bg-rose-50 text-rose-700"
-        : "bg-indigo-50 text-indigo-600",
+        : "bg-primary-soft text-primary",
   );
 
   const Icon =
@@ -274,7 +288,7 @@ export default function IngestionPage() {
     setLocalFile(file);
     setExtractFeedback({ state: "idle" });
 
-     const uploadId = crypto.randomUUID();
+     const uploadId = generateId();
      pendingLocalUploadIdRef.current = uploadId;
      setUploads((previous) => [
        {
@@ -292,22 +306,19 @@ export default function IngestionPage() {
     if (file.name.toLowerCase().endsWith(".json")) {
       const text = await file.text();
       setLocalFileText(text);
-
-      const isDuplicate = uploads.some(
-        (u) => u.name === file.name && u.size === file.size && u.status === "success"
-      );
-
       const parsed = safeJsonParse(text);
       if (parsed) {
         seedPreviewTree(file.name, parsed);
-        const { locale, pageId } = extractLocaleAndPageId(parsed, file.name);
-        if (locale || pageId) {
+        const filenameLocale = inferLocaleFromFilename(file.name);
+        const { locale: payloadLocale, pageId } = extractLocaleAndPageId(parsed);
+
+        if (filenameLocale || payloadLocale || pageId) {
           setUploads((previous) =>
             previous.map((upload) =>
               upload.id === uploadId
                 ? {
                     ...upload,
-                    locale: locale ?? upload.locale,
+                    locale: filenameLocale ?? payloadLocale ?? upload.locale,
                     pageId: pageId ?? upload.pageId,
                   }
                 : upload,
@@ -362,7 +373,7 @@ export default function IngestionPage() {
       );
       return;
     }
-    const uploadId = crypto.randomUUID();
+    const uploadId = generateId();
     pendingApiUploadIdRef.current = uploadId;
     setUploads((previous) => [
       {
@@ -380,7 +391,7 @@ export default function IngestionPage() {
 
   const processLocalExtraction = async () => {
     const existingUploadId = pendingLocalUploadIdRef.current;
-    const uploadId = existingUploadId ?? crypto.randomUUID();
+    const uploadId = existingUploadId ?? generateId();
 
     if (!localFile) {
       setExtractFeedback({
@@ -408,7 +419,9 @@ export default function IngestionPage() {
     }
 
     const parsedPayload = localFileText ? safeJsonParse(localFileText) : null;
-    const payloadMetadata = extractLocaleAndPageId(parsedPayload);
+    const filenameLocale = inferLocaleFromFilename(localFile.name);
+    const { locale: payloadLocale, pageId: payloadPageId } =
+      extractLocaleAndPageId(parsedPayload);
 
     try {
       const formData = new FormData();
@@ -435,8 +448,8 @@ export default function IngestionPage() {
                 backendMessage: details.message ?? item.backendMessage,
                 sourceIdentifier,
                 sourceType,
-                locale: payloadMetadata.locale ?? details.locale ?? item.locale,
-                pageId: payloadMetadata.pageId ?? details.pageId ?? item.pageId,
+                locale: filenameLocale ?? details.locale ?? payloadLocale ?? item.locale,
+                pageId: payloadPageId ?? details.pageId ?? item.pageId,
               }
             : item,
         ),
@@ -451,23 +464,18 @@ export default function IngestionPage() {
         return;
       }
 
-      const isDuplicate = uploads.some(
-        (u) => u.name === localFile.name && u.size === localFile.size && u.status === "success"
-      );
-
       const metadata: ExtractionContext["metadata"] = {
         name: localFile.name,
         size: localFile.size,
         source: describeSourceLabel(sourceType, "Local upload"),
         cleansedId: details.cleansedId,
-        status: isDuplicate ? "ENRICHED_NO_ITEMS_TO_PROCESS" : (details.status ?? "ACCEPTED"),
+        status: details.status,
         uploadedAt: Date.now(),
         sourceIdentifier,
         sourceType,
-        locale: payloadMetadata.locale ?? details.locale,
-        pageId: payloadMetadata.pageId ?? details.pageId,
-        isDuplicate,
-      } as any;
+        locale: filenameLocale ?? details.locale ?? payloadLocale,
+        pageId: payloadPageId ?? details.pageId,
+      };
       const snapshotId = details.cleansedId ?? uploadId;
       let snapshotPersisted = false;
       let resolvedSnapshotId: string | undefined;
@@ -540,13 +548,9 @@ export default function IngestionPage() {
     }
     const payloadMetadata = extractLocaleAndPageId(parsed);
 
-    const isDuplicate = uploads.some(
-      (u) => u.source === "API" && u.size === apiPayload.length && u.status === "success"
-    );
-
     setApiFeedback({ state: "loading" });
     const existingUploadId = pendingApiUploadIdRef.current;
-    const uploadId = existingUploadId ?? crypto.randomUUID();
+    const uploadId = existingUploadId ?? generateId();
     if (!existingUploadId) {
       pendingApiUploadIdRef.current = uploadId;
       setUploads((previous) => [
@@ -622,14 +626,13 @@ export default function IngestionPage() {
         size: apiPayload.length,
         source: describeSourceLabel(sourceType, "API payload"),
         cleansedId: details.cleansedId,
-        status: isDuplicate ? "ENRICHED_NO_ITEMS_TO_PROCESS" : (details.status ?? "ACCEPTED"),
+        status: details.status,
         uploadedAt: Date.now(),
         sourceIdentifier,
         sourceType,
         locale: payloadMetadata.locale ?? details.locale,
         pageId: payloadMetadata.pageId ?? details.pageId,
-        isDuplicate,
-      } as any;
+      };
       const snapshotId = details.cleansedId ?? uploadId;
       const serializedPayload = JSON.stringify(parsed, null, 2);
 
@@ -694,7 +697,7 @@ export default function IngestionPage() {
     }
 
     setS3Feedback({ state: "loading" });
-    const uploadId = crypto.randomUUID();
+    const uploadId = generateId();
     setUploads((previous) => [
       {
         id: uploadId,
@@ -1041,328 +1044,270 @@ export default function IngestionPage() {
 
   return (
     <PipelineShell currentStep="ingestion">
-      <StageHero
-        title="Ingestion"
-        description="Upload local JSON files, paste API payloads, or reference cloud storage to kick off the pipeline."
-      />
-
-      <main className="mx-auto grid max-w-[1600px] gap-6 px-4 py-6 sm:px-6 sm:py-10 lg:grid-cols-[1.2fr_1fr]">
-        <section className="space-y-6 overflow-hidden">
-          <div className="rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm overflow-hidden">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <p className="text-xs uppercase tracking-wide text-slate-400">
-                  Ingestion
-                </p>
-                <h2 className="mt-1 text-xl font-semibold text-slate-900">
-                  Upload Files
-                </h2>
-                <p className="text-sm text-slate-500">
-                  Drag and drop JSON, paste payloads, or point at S3/classpath URIs.
+      <div className="min-h-[calc(100vh-4rem)] bg-background">
+        <section className="border-b border-slate-200 bg-white">
+          <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-3 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+              <div className="space-y-1 sm:space-y-2">
+                <h1 className="text-2xl sm:text-3xl font-bold text-black">Ingestion</h1>
+                <p className="text-xs sm:text-sm font-medium text-slate-500 lg:max-w-2xl">
+                  Upload local JSON files, paste API payloads, or reference cloud storage to kick off the pipeline.
                 </p>
               </div>
               <FeedbackPill feedback={extractFeedback} />
             </div>
+          </div>
+        </section>
 
-            <div className="mt-6 grid gap-3 sm:grid-cols-3">
-              {uploadTabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  disabled={tab.disabled}
-                  onClick={() => !tab.disabled && setActiveTab(tab.id)}
-                  className={clsx(
-                    "rounded-2xl border px-4 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900/50",
-                    tab.disabled
-                      ? "border-dashed border-slate-200 text-slate-400"
-                      : activeTab === tab.id
-                        ? "border-slate-900 bg-slate-900/[0.04] shadow-[0_18px_35px_rgba(15,23,42,0.12)]"
-                        : "border-slate-200 hover:border-slate-900/40",
-                  )}
-                >
-                  <div className="flex items-center gap-3">
-                    <tab.icon
+        <main className="mx-auto grid max-w-[1600px] gap-6 px-4 py-6 sm:px-6 sm:py-10 lg:grid-cols-12 items-stretch">
+          <section className="lg:col-span-7 space-y-6 overflow-hidden flex flex-col">
+            <div className="rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm overflow-hidden flex flex-col">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-slate-400 font-bold">Ingestion</p>
+                  <h2 className="mt-1 text-xl font-semibold text-slate-900">Upload Files</h2>
+                  <p className="text-sm text-slate-500">Drag and drop JSON, paste payloads, or point at S3/classpath URIs.</p>
+                </div>
+              </div>
+              <div className="mt-6 grid gap-3 sm:grid-cols-3">
+                {uploadTabs.map((tab) => {
+                  const isActive = activeTab === tab.id;
+                  const Icon = tab.icon;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setActiveTab(tab.id)}
                       className={clsx(
-                        "size-5 transition-colors",
-                        tab.disabled
-                          ? "text-slate-300"
-                          : activeTab === tab.id
-                            ? "text-slate-900"
-                            : "text-slate-700",
+                        "rounded-2xl border px-4 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900/50",
+                        isActive
+                          ? "border-slate-900 bg-slate-900/[0.04] shadow-[0_18px_35px_rgba(15,23,42,0.12)]"
+                          : "border-slate-200 hover:border-slate-900/40"
                       )}
-                    />
+                    >
+                      <div className="flex items-center gap-3">
+                        <Icon className={clsx("size-5 transition-colors", isActive ? "text-slate-900" : "text-slate-700")} />
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{tab.title}</p>
+                          <p className="text-xs text-slate-500">{tab.description}</p>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {activeTab === "local" && (
+                <div
+                  className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center cursor-pointer hover:bg-slate-100 transition-colors"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <div className="flex flex-col items-center gap-4">
+                    <ArrowUpTrayIcon className="size-10 text-slate-900" />
                     <div>
                       <p className="text-sm font-semibold text-slate-900">
-                        {tab.title}
+                        Drag a JSON file here or <span className="underline decoration-slate-900/40">browse</span>
                       </p>
-                      <p className="text-xs text-slate-500">
-                        {tab.description}
-                      </p>
+                      <p className="text-xs text-slate-500">Single-file uploads only. Max 50 MB.</p>
                     </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-
-            {activeTab === "local" && (
-              <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
-                <label
-                  htmlFor="file-upload"
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    handleLocalFileSelection(event.dataTransfer.files);
-                  }}
-                  className="flex cursor-pointer flex-col items-center gap-4"
-                >
-                  <ArrowUpTrayIcon className="size-10 text-slate-900" />
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900">
-                      Drag a JSON file here or{" "}
-                      <span className="underline decoration-slate-900/40">browse</span>
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      Single-file uploads only. Max 50 MB.
-                    </p>
                     {localFile && (
-                      <p className="mt-1 text-xs text-slate-500">
-                        Selected: <span className="font-semibold text-slate-800">{localFile.name}</span>
-                      </p>
+                      <div className="mt-2 inline-flex items-center gap-2 px-3 py-1 bg-primary-soft text-primary rounded-full text-xs font-bold">
+                        <DocumentTextIcon className="size-4" />
+                        {localFile.name}
+                      </div>
                     )}
+                    <input
+                      id="file-upload"
+                      type="file"
+                      ref={fileInputRef}
+                      className="hidden"
+                      accept=".json,application/json"
+                      onChange={(e) => handleLocalFileSelection(e.target.files)}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {activeTab === "api" && (
+                <div className="mt-6 space-y-4">
+                  <div className="flex items-center gap-2 text-sm font-bold text-gray-900">
+                    <ServerStackIcon className="size-5 text-slate-900" />
+                    API Endpoint
+                  </div>
+                  <textarea
+                    rows={8}
+                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-base font-mono focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-900"
+                    placeholder='Paste JSON payload. Example: { "product": { "name": "Vision Pro" } }'
+                    value={apiPayload}
+                    onChange={(e) => {
+                      setApiPayload(e.target.value);
+                      const parsed = safeJsonParse(e.target.value);
+                      if (parsed) {
+                        seedPreviewTree("API payload", parsed);
+                        setApiFeedback({ state: "idle" });
+                        ensurePendingApiUpload(e.target.value.length);
+                      }
+                    }}
+                  />
+                  <FeedbackPill feedback={apiFeedback} />
+                </div>
+              )}
+
+              {activeTab === "s3" && (
+                <div className="mt-6 space-y-4">
+                  <div className="flex items-center gap-2 text-sm font-bold text-gray-900">
+                    <CloudArrowUpIcon className="size-5 text-slate-900" />
+                    Amazon S3
                   </div>
                   <input
-                    id="file-upload"
-                    ref={fileInputRef}
-                    type="file"
-                    className="sr-only"
-                    accept=".json,application/json"
-                    onChange={(event) => handleLocalFileSelection(event.target.files)}
+                    type="text"
+                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-base focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-900"
+                    placeholder="s3://my-bucket/path/to/file.json"
+                    value={s3Uri}
+                    onChange={(e) => setS3Uri(e.target.value)}
                   />
-                </label>
-              </div>
-            )}
-
-            {activeTab === "api" && (
-              <div className="mt-6 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                  <ServerStackIcon className="size-5 text-slate-900" />
-                  POST /api/ingest-json-payload
+                  <p className="text-xs text-slate-500">
+                    Accepts s3://bucket/key or classpath:relative/path references.
+                  </p>
+                  <FeedbackPill feedback={s3Feedback} />
                 </div>
-                <textarea
-                  value={apiPayload}
-                  onChange={(event) => {
-                    setApiPayload(event.target.value);
-                    const parsed = safeJsonParse(event.target.value);
-                    if (parsed) {
-                      seedPreviewTree("API payload", parsed);
-                      setApiFeedback({ state: "idle" });
-                      ensurePendingApiUpload(event.target.value.length);
-                    }
-                  }}
-                  rows={6}
-                  placeholder='Paste JSON payload. Example: { "product": { "name": "Vision Pro" } }'
-                  className="w-full rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-900 shadow-inner focus:border-indigo-500 focus:outline-none"
-                />
-                <FeedbackPill feedback={apiFeedback} />
-              </div>
-            )}
+              )}
+            </div>
 
-            {activeTab === "s3" && (
-              <div className="mt-6 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                  <CloudArrowUpIcon className="size-5 text-slate-900" />
-                  GET /api/extract-cleanse-enrich-and-store
+            <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm flex-1 flex flex-col min-h-[400px]">
+              <div className="flex flex-wrap items-center justify-between gap-3 shrink-0">
+                <h3 className="text-lg font-semibold text-slate-900">Upload History</h3>
+                <div className="relative w-full max-w-xs">
+                  <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-2.5 size-4 text-slate-400" />
+                  <input
+                    type="search"
+                    placeholder="Search coming soon"
+                    className="w-full cursor-not-allowed rounded-full border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm text-slate-400"
+                    disabled
+                  />
                 </div>
-                <input
-                  value={s3Uri}
-                  onChange={(event) => setS3Uri(event.target.value)}
-                  placeholder="s3://my-bucket/path/to/file.json"
-                  className="w-full rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-900 shadow-inner focus:border-indigo-500 focus:outline-none"
-                />
-                <p className="text-xs text-slate-500">
-                  Accepts s3://bucket/key or classpath:relative/path references that the Spring Boot service can access.
-                </p>
-                <FeedbackPill feedback={s3Feedback} />
               </div>
-            )}
-          </div>
+              <div className="mt-4 flex-1 overflow-auto pr-2 custom-scrollbar">
+                <div className="space-y-4">
+                  {uploads.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-500">
+                      Uploads will appear here once you submit files from the ingestion screen.
+                    </div>
+                  ) : (
+                    uploads.map((upload) => (
+                      <div
+                        key={upload.id}
+                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="rounded-2xl bg-white p-2 shadow-sm shrink-0">
+                            <DocumentTextIcon className="size-5 text-slate-500" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-slate-900 truncate">{upload.name}</p>
+                            <p className="text-xs text-slate-500 truncate">
+                              {new Date(upload.createdAt).toLocaleString()} • {upload.source}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto">
+                          <div className="flex items-center gap-2">
+                            <code className="rounded-full bg-white px-3 py-1 text-[10px] sm:text-xs font-semibold text-slate-600 shadow-inner">
+                              {upload.cleansedId ? upload.cleansedId.substring(0, 8) + "..." : "pending"}
+                            </code>
+                            <span
+                              className={clsx(
+                                "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[10px] sm:text-xs font-semibold",
+                                statusStyles[upload.status].className
+                              )}
+                            >
+                              <span className={clsx("size-2 rounded-full", statusStyles[upload.status].dot)} />
+                              {statusStyles[upload.status].label}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadUpload(upload)}
+                              disabled={downloadInFlight === upload.id}
+                              className="rounded-full p-1 text-slate-900 transition hover:bg-slate-900/10"
+                              title="Download payload"
+                            >
+                              <ArrowDownTrayIcon className="size-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteUpload(upload.id)}
+                              className="rounded-full p-1 text-slate-900 transition hover:bg-slate-900/10"
+                              title="Delete entry"
+                            >
+                              <TrashIcon className="size-4" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
 
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h3 className="text-lg font-semibold text-slate-900">Upload History</h3>
-              <div className="relative w-full max-w-xs">
+          <section className="lg:col-span-5 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm lg:sticky lg:top-[20rem] h-[calc(100vh-24rem)] min-h-[600px] flex flex-col">
+            <div className="flex items-center justify-between shrink-0">
+              <div>
+                <p className="text-xs uppercase tracking-wide text-slate-400 font-bold">Preview</p>
+                <h3 className="text-lg font-semibold text-slate-900">Select Items</h3>
+                <p className="text-xs text-slate-500">Preview is read-only. All fields will be sent forward.</p>
+              </div>
+              <span className="text-sm font-semibold text-slate-600">{previewLeaves.length} fields</span>
+            </div>
+
+            <div className="mt-4 flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5">
+              <InboxStackIcon className="size-4 text-slate-500" />
+              <span className="text-xs font-semibold text-slate-600">{previewLabel}</span>
+            </div>
+
+            <div className="mt-4 flex-1 flex flex-col min-h-0">
+              <div className="relative shrink-0">
                 <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-2.5 size-4 text-slate-400" />
                 <input
                   type="search"
-                  placeholder="Search coming soon"
-                  className="w-full cursor-not-allowed rounded-full border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm text-slate-400"
-                  disabled
+                  placeholder="Search fields..."
+                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-base lg:text-sm text-slate-900 focus:border-slate-900 focus:bg-white focus:outline-none"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
                 />
               </div>
-            </div>
-
-            <div className="mt-4 max-h-[400px] overflow-auto pr-2 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
-              <div className="space-y-4 min-w-[600px] sm:min-w-0">
-              {uploads.length === 0 && (
-                <div className="rounded-2xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-500">
-                  No uploads yet. Drop a JSON file to start the pipeline.
-                </div>
-              )}
-              {uploads.map((upload) => {
-                const status = statusStyles[upload.status];
-                const downloading = downloadInFlight === upload.id;
-                return (
-                  <div
-                    key={upload.id}
-                    className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="rounded-2xl bg-white p-2 shadow-sm">
-                        <DocumentTextIcon className="size-5 text-slate-500" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold text-slate-900">
-                          {upload.name}
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          {new Date(upload.createdAt).toLocaleString()} • {upload.source}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      {upload.cleansedId && (
-                        <code className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-inner">
-                          {upload.cleansedId}
-                        </code>
-                      )}
-                      <span
-                        className={clsx(
-                          "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold",
-                          status.className,
-                        )}
-                      >
-                        <span className={clsx("size-2 rounded-full", status.dot)} />
-                        {status.label}
-                      </span>
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => handleDownloadUpload(upload)}
-                          disabled={downloading}
-                          className={clsx(
-                            "rounded-full p-1 text-slate-900 transition hover:bg-slate-900/10",
-                            downloading && "cursor-wait opacity-60",
-                          )}
-                          title="Download payload"
-                          aria-label="Download payload"
-                        >
-                          <ArrowDownTrayIcon className="size-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteUpload(upload.id)}
-                          className="rounded-full p-1 text-slate-900 transition hover:bg-slate-900/10"
-                          title="Delete entry"
-                          aria-label="Delete entry"
-                        >
-                          <TrashIcon className="size-4" />
-                        </button>
-                      </div>
-                    </div>
+              <div className="mt-4 flex-1 overflow-y-auto custom-scrollbar min-h-0">
+                {treeNodes.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-500">
+                    Upload a JSON payload to view its structure.
                   </div>
-                );
-              })}
+                ) : (
+                  <div className="space-y-1">{renderTree(treeNodes)}</div>
+                )}
               </div>
             </div>
-          </div>
-        </section>
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-wide text-slate-400">
-                Preview
-              </p>
-              <h3 className="text-lg font-semibold text-slate-900">
-                Select Items
-              </h3>
-              <p className="text-xs text-slate-500">Preview is read-only. All fields will be sent forward.</p>
+            <div className="mt-6 rounded-2xl bg-slate-50 p-4 shrink-0">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                <span className="font-semibold text-slate-800 uppercase">Fields:</span>
+                {/* Could map previewLeaves if needed, but the reference shows just the label */}
+              </div>
+              <button
+                type="button"
+                onClick={handleExtractData}
+                disabled={extracting || (!localFile && activeTab === "local")}
+                className="mt-4 w-full rounded-full bg-primary py-2.5 text-sm font-semibold text-white transition hover:bg-accent disabled:opacity-50"
+              >
+                {extracting ? "Extracting..." : "Extract Data"}
+              </button>
             </div>
-            <span className="text-sm font-semibold text-slate-600">
-              {previewLeaves.length} fields
-            </span>
-          </div>
-          <div className="mt-4 flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5">
-            <InboxStackIcon className="size-4 text-slate-500" />
-            <span className="text-xs font-semibold text-slate-600">
-              {previewLabel}
-            </span>
-          </div>
-
-          <div className="mt-4">
-            <div className="relative">
-              <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-2.5 size-4 text-slate-400" />
-              <input
-                type="search"
-                placeholder="Search fields..."
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none"
-              />
-            </div>
-            <div className="mt-4 max-h-[420px] overflow-y-auto pr-2">
-              {filteredTree.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-500">
-                  Upload a JSON payload to view its structure.
-                </div>
-              ) : (
-                <div className="space-y-3">{renderTree(filteredTree)}</div>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-6 rounded-2xl bg-slate-50 p-4">
-            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-              <span className="font-semibold text-slate-800">Fields:</span>
-              {previewLeaves.slice(0, 6).map((leaf) => (
-                <span
-                  key={leaf.id}
-                  className="rounded-full bg-white px-3 py-1 font-semibold shadow-sm"
-                >
-                  {leaf.label}
-                </span>
-              ))}
-              {previewLeaves.length > 6 && (
-                <span className="rounded-full bg-white px-3 py-1 font-semibold shadow-sm">
-                  +{previewLeaves.length - 6} more
-                </span>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={handleExtractData}
-              disabled={extracting}
-              className={clsx(
-                "mt-4 w-full rounded-full bg-slate-900 py-2.5 text-sm font-semibold text-white transition hover:bg-black",
-                extracting && "cursor-not-allowed opacity-60 hover:bg-slate-900",
-              )}
-            >
-              {extracting ? (
-                <span className="inline-flex items-center justify-center gap-2">
-                  <ArrowPathIcon className="size-4 animate-spin" />
-                  Extracting…
-                </span>
-              ) : (
-                "Extract Data"
-              )}
-            </button>
-          </div>
-        </section>
-      </main>
+          </section>
+        </main>
+      </div>
     </PipelineShell>
   );
 }

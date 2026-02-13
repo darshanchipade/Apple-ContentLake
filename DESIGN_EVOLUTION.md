@@ -1,6 +1,6 @@
-# Futuristic Pipeline Design: Image References & Multi-Format Document Support
+# Futuristic Pipeline Design: Image References & Multi-Format Support
 
-This document outlines the technical strategy for integrating Images (via references), PDFs, Word documents, and Excel files into the Content Lake pipeline while maximizing the reuse of existing logic and tables.
+This document outlines the technical strategy for integrating Images (via references), PDFs, Word documents, Excel files, and **HTML sources** into the Content Lake pipeline while maximizing the reuse of existing logic and tables.
 
 ## 1. Core Data Flow: The "Canonical Normalization" Strategy
 
@@ -8,71 +8,72 @@ To maintain a stable core pipeline, all non-JSON inputs are converted into a **S
 
 ### The Lifecycle of an Asset
 1.  **Ingestion**:
-    - **Binary Files (PDF, Word, Excel)**: Uploaded to S3; returns a `source_uri`.
+    - **Binary Files (PDF, Word, Excel, HTML)**: Uploaded to S3; returns a `source_uri`.
+    - **Web Sources**: URL is provided for crawling/scraping.
     - **Image References**: Received as pointers within a standard JSON payload.
 2.  **Normalization (The Adapter Layer)**: Format-specific processors convert the source into a "Virtual JSON".
 3.  **Standard Pipeline**: The Virtual JSON is fed into the existing Extraction -> Cleansing -> Enrichment -> Search Indexing flow.
 
 ---
 
-## 2. Document-Specific Processing Strategies
+## 2. Document & HTML Processing Strategies
 
-### A. PDF Documents
--   **Tooling**: **Amazon Textract** (Recommended) or **Apache PDFBox**.
--   **Extraction Logic**: Textract is superior for preserving layout context (identifying tables, headers, and columns).
--   **Virtual JSON Mapping**:
-    - Each Page or Section becomes a JSON object.
-    - Page numbers and layout metadata are stored in the **Provenance** field.
+### A. HTML Sources (Websites & Static Files)
+-   **Tooling**: **Jsoup** (Java HTML Parser).
+-   **Ingestion Flow**:
+    - **File Upload**: Processing a static `.html` or `.zip` of a site.
+    - **URL Scraping**: Providing a URL which the pipeline fetches and parses.
+-   **Extraction Logic**:
+    - **Selectors to Paths**: Use CSS selectors or XPath to map DOM elements to `_path`. For example, a `<div id="hero-title">` maps to `hero-title`.
+    - **Semantic Mapping**: Map standard tags (`<h1>`, `<article>`, `<meta name="description">`) to pipeline `_model` identifiers.
+    - **Asset Discovery**: Identify `<img>` tags and `<a>` links. Images are emitted as downstream "Image References" for Vision AI processing.
+-   **Virtual JSON Mapping**: The HTML hierarchy is flattened into a JSON object where keys represent the semantic location and values contain the `copy`.
 
-### B. Word Documents (DOCX)
+### B. PDF Documents
+-   **Tooling**: **Amazon Textract** (Recommended) for layout-aware extraction.
+-   **Extraction Logic**: Identifying tables, headers, and reading order.
+-   **Virtual JSON Mapping**: Pages/Sections become JSON objects with text fragments.
+
+### C. Word (DOCX) & Excel (XLSX)
 -   **Tooling**: **Apache POI**.
--   **Extraction Logic**: Traverse the document's XML structure to extract paragraphs, lists, and tables.
--   **Virtual JSON Mapping**: Maps document headers to `_model` identifiers and text to the `copy` field.
-
-### C. Excel Sheets (XLSX)
--   **Tooling**: **Apache POI**.
--   **Extraction Logic**: Convert rows and columns into Flattened Key-Value pairs.
--   **Metadata**: Sheet names and Cell coordinates are preserved in **Facets** to allow specific chatbot queries like "What is the value in Sheet1 cell B2?".
+-   **Logic**: Converting paragraphs (Word) or cells (Excel) into structured key-value pairs, preserving authorship and sheet context in **Facets**.
 
 ---
 
 ## 3. Cleansing & AI Augmentation
 
-### Image References (AI Generation)
-- **Augmentation**: For pointers like `{"image_url": "..."}`, the pipeline triggers **AWS Bedrock (Vision)** to generate descriptions and OCR text.
-- **Cleansing**: Normalizes AI-misread characters and standardizes Alt-text length for UI consistency.
+### Image References (Vision AI)
+- **Action**: For pointers discovered in JSON or HTML (e.g., `<img src="...">`), the pipeline triggers **AWS Bedrock (Vision)**.
+- **Normalization**: AI-generated Alt-text and OCR are sanitized via standard cleansing rules (whitespace normalization, sensitive token scrubbing).
 
 ---
 
 ## 4. Impact on Existing Database Tables
 
-To maintain a unified experience, all metadata is stored in the **existing table structure**:
-
 ### A. `enriched_content_element`
--   **Role**: Stores the extracted text from documents or AI-generated image metadata as discrete elements.
--   **Types**: New `item_types` like `PDF_FRAGMENT`, `WORD_PARA`, `EXCEL_CELL`, and `IMAGE_DESCRIPTION`.
+-   **Types**: New types like `HTML_META`, `HTML_BODY`, `PDF_TABLE`, `IMAGE_ALT`.
+-   **Selectors**: For HTML, the original CSS selector can be stored in the metadata to allow "Source-to-Lake" traceability.
 
 ### B. `consolidated_enriched_section`
--   **Role**: Acts as the roll-up view for the Search Finder.
--   **Change**: A single entry represents a document "Section" or "Sheet," containing all its constituent text for unified searching.
+-   **Unit of Consolidation**: For HTML, a "Section" might represent a single webpage. For Excel, it represents a Sheet.
+-   **Unified Search**: Enables the Search Finder to locate a "Page" or "Document" based on any text fragment within it.
 
 ### C. `content_chunk` & Vector Search
--   **Role**: Powers the Chatbot and Semantic Search.
--   **Change**: Document fragments and image descriptions are chunked and embedded.
--   **Outcome**: The Chatbot can answer questions from a PDF or describe an image reference because they coexist in the same vector space.
+-   **Chunking**: HTML is chunked by block-level elements (div, p, section).
+-   **Semantic Querying**: The Chatbot can answer questions about website content by retrieving the relevant HTML fragments from the vector store.
 
 ---
 
 ## 5. Component-Level Changes (Spring Boot)
 
--   **`NormalizationService`**: A new orchestrator that selects the correct adapter (Textract, POI, Jsoup) based on MIME type.
--   **`AssetRefAdapter`**: Handles the asynchronous lifecycle of Vision AI requests for image pointers.
--   **`UnifiedSearchService`**: Refactored to include document metadata (Authorship, Page Counts) and `asset_reference` pointers in result DTOs.
+-   **`HtmlAdapter`**: A dedicated service using Jsoup to clean HTML (removing scripts/styles) and extract structured content.
+-   **`MetadataHarvester`**: Extracts technical metadata from documents (File size, Author, Last Modified, HTML Meta tags) and stores them in `Provenance`.
+-   **`CrawlController`**: (Optional) New endpoint to initiate content extraction from a live URL.
 
 ---
 
 ## 6. Implementation Roadmap
--   **Phase 1**: Update Ingestion to support S3-based binary uploads for PDF/Word/Excel.
--   **Phase 2**: Implement the **Canonical Adapters** to transform these binaries into the pipeline's expected JSON format.
--   **Phase 3**: Integrate **Claude 3 Vision** for image reference enrichment.
+-   **Phase 1**: Support S3-based binary uploads for PDF/Word/Excel/HTML.
+-   **Phase 2**: Implement **Jsoup Adapter** for HTML structure-to-JSON mapping.
+-   **Phase 3**: Integrate **Claude 3 Vision** for image reference enrichment found in HTML/JSON.
 -   **Phase 4**: Enable **Multimodal Embeddings** for a unified "Chat with anything" experience.

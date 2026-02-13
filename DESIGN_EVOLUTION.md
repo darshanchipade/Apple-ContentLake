@@ -1,58 +1,78 @@
-# Futuristic Pipeline Design: Image References & Multi-Format Assets
+# Futuristic Pipeline Design: Image References & Multi-Format Document Support
 
-This document outlines the technical strategy for integrating Images (via references), HTML, and Excel files into the Content Lake pipeline while maximizing the reuse of existing logic and tables.
+This document outlines the technical strategy for integrating Images (via references), PDFs, Word documents, and Excel files into the Content Lake pipeline while maximizing the reuse of existing logic and tables.
 
-## 1. Core Data Flow: The "Virtual JSON" Augmentation
+## 1. Core Data Flow: The "Canonical Normalization" Strategy
 
-The pipeline's input remains a **JSON payload**. When images are involved, the user provides a JSON containing **Image References** (External URLs or Asset IDs), not binary files.
+To maintain a stable core pipeline, all non-JSON inputs are converted into a **Standardized Internal JSON schema** at the ingestion boundary. This ensures that Cleansing and Enrichment logic remains consistent regardless of the source.
 
-### The Lifecycle of an Image Asset
-1.  **Ingestion (Input JSON)**: The user sends a standard JSON containing an external pointer: `{"image_url": "https://cdn.com/asset1.jpg"}`.
-2.  **Augmentation (AI Generation)**: The pipeline detects the `image_url`, triggers **AWS Bedrock (Vision)**, and retrieves a descriptive metadata object: `{"description": "A silver laptop on a desk", "ocr_text": "Buy Now"}`.
-3.  **Standardization (Virtual JSON)**: The generated metadata is injected back into the JSON structure as if it were original text content.
-4.  **Cleansing**: The AI-generated text (`description`, `ocr_text`) is run through the cleansing engine to normalize whitespace, remove unwanted tokens, and ensure it meets system standards.
-
----
-
-## 2. Cleansing Strategy for Non-Text Assets
-
-Cleansing for image-derived data focuses on **AI Output Sanitization**:
--   **OCR Text Normalization**: AI-extracted text from images often contains erratic formatting or misread characters. Cleansing rules will normalize these into readable strings.
--   **Alt-Text Standardization**: Descriptions are capped and formatted to match existing copy elements for UI consistency.
--   **Pointer Validation**: The Cleansing stage verifies that the `image_url` is still accessible and follows the required security protocols (HTTPS, specific CDN domains).
+### The Lifecycle of an Asset
+1.  **Ingestion**:
+    - **Binary Files (PDF, Word, Excel)**: Uploaded to S3; returns a `source_uri`.
+    - **Image References**: Received as pointers within a standard JSON payload.
+2.  **Normalization (The Adapter Layer)**: Format-specific processors convert the source into a "Virtual JSON".
+3.  **Standard Pipeline**: The Virtual JSON is fed into the existing Extraction -> Cleansing -> Enrichment -> Search Indexing flow.
 
 ---
 
-## 3. Impact on Existing Database Tables
+## 2. Document-Specific Processing Strategies
 
-To maintain a unified search and chatbot experience, image metadata is stored in the **existing table structure**:
+### A. PDF Documents
+-   **Tooling**: **Amazon Textract** (Recommended) or **Apache PDFBox**.
+-   **Extraction Logic**: Textract is superior for preserving layout context (identifying tables, headers, and columns).
+-   **Virtual JSON Mapping**:
+    - Each Page or Section becomes a JSON object.
+    - Page numbers and layout metadata are stored in the **Provenance** field.
+
+### B. Word Documents (DOCX)
+-   **Tooling**: **Apache POI**.
+-   **Extraction Logic**: Traverse the document's XML structure to extract paragraphs, lists, and tables.
+-   **Virtual JSON Mapping**: Maps document headers to `_model` identifiers and text to the `copy` field.
+
+### C. Excel Sheets (XLSX)
+-   **Tooling**: **Apache POI**.
+-   **Extraction Logic**: Convert rows and columns into Flattened Key-Value pairs.
+-   **Metadata**: Sheet names and Cell coordinates are preserved in **Facets** to allow specific chatbot queries like "What is the value in Sheet1 cell B2?".
+
+---
+
+## 3. Cleansing & AI Augmentation
+
+### Image References (AI Generation)
+- **Augmentation**: For pointers like `{"image_url": "..."}`, the pipeline triggers **AWS Bedrock (Vision)** to generate descriptions and OCR text.
+- **Cleansing**: Normalizes AI-misread characters and standardizes Alt-text length for UI consistency.
+
+---
+
+## 4. Impact on Existing Database Tables
+
+To maintain a unified experience, all metadata is stored in the **existing table structure**:
 
 ### A. `enriched_content_element`
--   **Role**: Stores the AI-generated metadata as discrete elements.
--   **Change**: A new `item_type` (e.g., `IMAGE_DESCRIPTION`, `IMAGE_OCR`) is added.
--   **Relationship**: These elements will link to a new `asset_references` table via a foreign key, allowing the UI to display the original image next to its enrichment.
+-   **Role**: Stores the extracted text from documents or AI-generated image metadata as discrete elements.
+-   **Types**: New `item_types` like `PDF_FRAGMENT`, `WORD_PARA`, `EXCEL_CELL`, and `IMAGE_DESCRIPTION`.
 
 ### B. `consolidated_enriched_section`
 -   **Role**: Acts as the roll-up view for the Search Finder.
--   **Change**: The "full content" field for a section will now include the image descriptions and OCR text.
--   **Benefit**: When a user searches for "silver laptop," the Search Finder finds the section because the image description is consolidated into the section's searchable text.
+-   **Change**: A single entry represents a document "Section" or "Sheet," containing all its constituent text for unified searching.
 
 ### C. `content_chunk` & Vector Search
--   **Role**: Powers semantic search and the Chatbot.
--   **Change**: Image descriptions are chunked and embedded just like text.
--   **Outcome**: The Chatbot can "see" assets. A query like "Show me visual assets related to portabilty" will return images where the AI-generated description contains portabilty-related concepts.
+-   **Role**: Powers the Chatbot and Semantic Search.
+-   **Change**: Document fragments and image descriptions are chunked and embedded.
+-   **Outcome**: The Chatbot can answer questions from a PDF or describe an image reference because they coexist in the same vector space.
 
 ---
 
-## 4. Component-Level Changes (Spring Boot)
+## 5. Component-Level Changes (Spring Boot)
 
--   **`AssetRefAdapter`**: A new service to parse JSON for image pointers and handle the asynchronous lifecycle of Vision AI requests.
--   **`UnifiedCleansingService`**: Updated to handle both "Original Field" text and "AI Derived" text using the same regex-based sanitization logic.
--   **`SearchService`**: Refactored to include `asset_reference` metadata in result DTOs so the frontend can render image previews.
+-   **`NormalizationService`**: A new orchestrator that selects the correct adapter (Textract, POI, Jsoup) based on MIME type.
+-   **`AssetRefAdapter`**: Handles the asynchronous lifecycle of Vision AI requests for image pointers.
+-   **`UnifiedSearchService`**: Refactored to include document metadata (Authorship, Page Counts) and `asset_reference` pointers in result DTOs.
 
 ---
 
-## 5. Summary of Implementation Roadmap
--   **Short Term**: Refactor Ingestion to recognize `image_url` keys and map them to the `asset_references` table.
--   **Medium Term**: Trigger Bedrock Vision on-the-fly and feed the output into the existing `CleansingProcessor`.
--   **Long Term**: Use Titan Multimodal Embeddings to allow unified Chatbot responses across text and visuals.
+## 6. Implementation Roadmap
+-   **Phase 1**: Update Ingestion to support S3-based binary uploads for PDF/Word/Excel.
+-   **Phase 2**: Implement the **Canonical Adapters** to transform these binaries into the pipeline's expected JSON format.
+-   **Phase 3**: Integrate **Claude 3 Vision** for image reference enrichment.
+-   **Phase 4**: Enable **Multimodal Embeddings** for a unified "Chat with anything" experience.

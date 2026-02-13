@@ -1,72 +1,58 @@
-# Futuristic Pipeline Design: From JSON to Multi-Format Assets
+# Futuristic Pipeline Design: Image References & Multi-Format Assets
 
-This document outlines the strategic evolution of the Content Lake pipeline to support Images (via references), HTML, and Excel formats while maintaining a robust and scalable architecture.
+This document outlines the technical strategy for integrating Images (via references), HTML, and Excel files into the Content Lake pipeline while maximizing the reuse of existing logic and tables.
 
-## 1. Core Architecture Evolution: The Canonical Adapter Pattern
+## 1. Core Data Flow: The "Virtual JSON" Augmentation
 
-To minimize disruption to existing Cleansing and Enrichment logic, we adopt a **Canonical Normalization Strategy**. Every input format is converted into a standard internal JSON schema at the edge of the pipeline.
+The pipeline's input remains a **JSON payload**. When images are involved, the user provides a JSON containing **Image References** (External URLs or Asset IDs), not binary files.
 
-### High-Level Data Flow
-1. **Ingestion**:
-   - **JSON/API**: Receives payload containing text content and/or **Image References** (External URLs, Asset IDs).
-   - **Files (HTML/XLSX)**: Binary is uploaded to S3 -> Returns S3 URI.
-2. **Adapter Layer**: format-specific logic generates a "Virtual Content JSON".
-   - **Image Reference**: Pipeline detects an image URL/ID and makes an asynchronous AI call to generate metadata.
-   - **HTML/XLSX**: Parsers convert structural data into structured fragments.
-3. **Canonicalization**: The Virtual JSON is injected into the standard pipeline.
-4. **Standard Pipeline**: Extraction -> Cleansing -> Enrichment -> Search Indexing.
+### The Lifecycle of an Image Asset
+1.  **Ingestion (Input JSON)**: The user sends a standard JSON containing an external pointer: `{"image_url": "https://cdn.com/asset1.jpg"}`.
+2.  **Augmentation (AI Generation)**: The pipeline detects the `image_url`, triggers **AWS Bedrock (Vision)**, and retrieves a descriptive metadata object: `{"description": "A silver laptop on a desk", "ocr_text": "Buy Now"}`.
+3.  **Standardization (Virtual JSON)**: The generated metadata is injected back into the JSON structure as if it were original text content.
+4.  **Cleansing**: The AI-generated text (`description`, `ocr_text`) is run through the cleansing engine to normalize whitespace, remove unwanted tokens, and ensure it meets system standards.
 
 ---
 
-## 2. Component-Level Changes
+## 2. Cleansing Strategy for Non-Text Assets
 
-### A. Spring Boot Service Layer
-- **`SourceAdapter` Interface**: Define `extractToCanonicalJson(InputSource source)`.
-- **`ImageReferenceAdapter`**:
-    - *Input*: External Image URL or Asset Metadata from JSON.
-    - *Action*: Triggers **AWS Bedrock (Claude 3 Vision)** using the external URL.
-    - *Output*: `{"image_description": "...", "ocr_text": "...", "asset_id": "..."}`.
-- **`HtmlAdapter`**: Uses **Jsoup**.
-    - *Input*: HTML Source.
-    - *Output*: Structured text fragments keyed by CSS selectors or semantic tags.
-- **`ExcelAdapter`**: Uses **Apache POI**.
-    - *Input*: XLSX.
-    - *Output*: Flattened key-value pairs representing rows and columns.
-
-### B. Database Schema (YugabyteDB / Postgres)
-- **`asset_references` (New Table)**:
-    - `id` (UUID)
-    - `external_url` (Pointer to the asset's actual location)
-    - `asset_id` (Original system identifier)
-    - `mime_type` (image/jpeg, etc.)
-    - `ai_metadata` (JSONB storing description, OCR, dimensions)
-- **`cleansed_item_detail`**: Link back to `asset_references` when a field is derived from an image.
+Cleansing for image-derived data focuses on **AI Output Sanitization**:
+-   **OCR Text Normalization**: AI-extracted text from images often contains erratic formatting or misread characters. Cleansing rules will normalize these into readable strings.
+-   **Alt-Text Standardization**: Descriptions are capped and formatted to match existing copy elements for UI consistency.
+-   **Pointer Validation**: The Cleansing stage verifies that the `image_url` is still accessible and follows the required security protocols (HTTPS, specific CDN domains).
 
 ---
 
-## 3. Storage & Integration Strategy
-1. **Actual Assets**: Remain at their original location (CDN, External DAM, etc.). The pipeline only handles **Metadata and Pointers**.
-2. **Metadata Enrichment**: AI insights (descriptions, OCR) are stored in the Database and indexed for search.
-3. **Search Index**: OpenSearch/Vector DB stores embeddings of the *image descriptions* to enable semantic discovery.
+## 3. Impact on Existing Database Tables
+
+To maintain a unified search and chatbot experience, image metadata is stored in the **existing table structure**:
+
+### A. `enriched_content_element`
+-   **Role**: Stores the AI-generated metadata as discrete elements.
+-   **Change**: A new `item_type` (e.g., `IMAGE_DESCRIPTION`, `IMAGE_OCR`) is added.
+-   **Relationship**: These elements will link to a new `asset_references` table via a foreign key, allowing the UI to display the original image next to its enrichment.
+
+### B. `consolidated_enriched_section`
+-   **Role**: Acts as the roll-up view for the Search Finder.
+-   **Change**: The "full content" field for a section will now include the image descriptions and OCR text.
+-   **Benefit**: When a user searches for "silver laptop," the Search Finder finds the section because the image description is consolidated into the section's searchable text.
+
+### C. `content_chunk` & Vector Search
+-   **Role**: Powers semantic search and the Chatbot.
+-   **Change**: Image descriptions are chunked and embedded just like text.
+-   **Outcome**: The Chatbot can "see" assets. A query like "Show me visual assets related to portabilty" will return images where the AI-generated description contains portabilty-related concepts.
 
 ---
 
-## 4. Futuristic Enhancements
+## 4. Component-Level Changes (Spring Boot)
 
-### 1. Semantic Search (Vector Embeddings)
-- **Solution**: Use **Amazon Titan Multimodal Embeddings**. Generate vectors for both text and image descriptions. Store in `pgvector`.
-- **Outcome**: The Search Finder and Chatbot can find visual assets by searching for their "meaning" (e.g., searching for "wireless technology" finds images containing headsets).
-
-### 2. Event-Driven AI Processing
-- For image references, the pipeline should not block. It emits an **SQS message** for the Bedrock worker to process the external image and update the enrichment context once ready.
-
-### 3. Cross-Format Deduplication
-- Use **Asset IDs** or **URL Hashing** to detect if an image reference has been processed before, reusing previous AI insights to reduce costs and latency.
+-   **`AssetRefAdapter`**: A new service to parse JSON for image pointers and handle the asynchronous lifecycle of Vision AI requests.
+-   **`UnifiedCleansingService`**: Updated to handle both "Original Field" text and "AI Derived" text using the same regex-based sanitization logic.
+-   **`SearchService`**: Refactored to include `asset_reference` metadata in result DTOs so the frontend can render image previews.
 
 ---
 
-## 5. Implementation Roadmap
-1. **Phase 1**: Update `DataIngestionService` to identify image-related nodes in JSON payloads.
-2. **Phase 2**: Implement `ImageReferenceAdapter` to call Bedrock Vision using external URLs.
-3. **Phase 3**: Refactor `SearchController` to query both text elements and image metadata.
-4. **Phase 4**: Transition to Multimodal Embeddings for a unified "Chat with Assets" experience.
+## 5. Summary of Implementation Roadmap
+-   **Short Term**: Refactor Ingestion to recognize `image_url` keys and map them to the `asset_references` table.
+-   **Medium Term**: Trigger Bedrock Vision on-the-fly and feed the output into the existing `CleansingProcessor`.
+-   **Long Term**: Use Titan Multimodal Embeddings to allow unified Chatbot responses across text and visuals.

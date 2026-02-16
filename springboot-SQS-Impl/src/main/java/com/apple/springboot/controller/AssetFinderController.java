@@ -69,4 +69,20 @@ public class AssetFinderController {
                 .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND)
                         .body(Map.of("error", "Asset not found for id " + id)));
     }
+
+    /**
+     * Returns extracted image row count for a cleansed upload.
+     */
+    @Operation(summary = "Get extracted asset count by cleansed upload id")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Count returned"),
+            @ApiResponse(responseCode = "404", description = "Cleansed record not found")
+    })
+    @GetMapping("/count/by-cleansed/{id}")
+    public ResponseEntity<?> getCountByCleansedId(@PathVariable("id") UUID id) {
+        return assetImageStoreService.getExtractionCountByCleansedId(id)
+                .<ResponseEntity<?>>map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("error", "Cleansed record not found for id " + id)));
+    }
 }

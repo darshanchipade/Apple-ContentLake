@@ -1,14 +1,17 @@
 package com.apple.springboot.service;
 
 import com.apple.springboot.dto.AssetFinderAssetDetailDto;
+import com.apple.springboot.dto.AssetFinderExtractionCountResponse;
 import com.apple.springboot.dto.AssetFinderFilterRequest;
 import com.apple.springboot.dto.AssetFinderOptionsResponse;
 import com.apple.springboot.dto.AssetFinderSearchResponse;
 import com.apple.springboot.dto.AssetFinderTileDto;
 import com.apple.springboot.model.AssetImageStore;
+import com.apple.springboot.model.CleansedDataStore;
 import com.apple.springboot.model.RawDataStore;
 import com.apple.springboot.model.UploadRequestMetadata;
 import com.apple.springboot.repository.AssetImageStoreRepository;
+import com.apple.springboot.repository.CleansedDataStoreRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -30,7 +33,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -67,6 +69,7 @@ public class AssetImageStoreService {
     );
 
     private final AssetImageStoreRepository assetImageStoreRepository;
+    private final CleansedDataStoreRepository cleansedDataStoreRepository;
     private final ObjectMapper objectMapper;
     private final JdbcTemplate jdbcTemplate;
 
@@ -98,9 +101,11 @@ public class AssetImageStoreService {
      * Creates a service for image extraction and Asset Finder access.
      */
     public AssetImageStoreService(AssetImageStoreRepository assetImageStoreRepository,
+                                  CleansedDataStoreRepository cleansedDataStoreRepository,
                                   ObjectMapper objectMapper,
                                   JdbcTemplate jdbcTemplate) {
         this.assetImageStoreRepository = assetImageStoreRepository;
+        this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.objectMapper = objectMapper;
         this.jdbcTemplate = jdbcTemplate;
     }
@@ -235,6 +240,41 @@ public class AssetImageStoreService {
             detail.setMetadata(parseJsonObject(asset.getAssetMetadataJson()));
             return detail;
         });
+    }
+
+    /**
+     * Returns extracted asset row counts for a cleansed upload record.
+     */
+    @Transactional(readOnly = true)
+    public Optional<AssetFinderExtractionCountResponse> getExtractionCountByCleansedId(UUID cleansedDataStoreId) {
+        return cleansedDataStoreRepository.findById(cleansedDataStoreId)
+                .map(this::buildExtractionCountResponse);
+    }
+
+    /**
+     * Builds a count response from a cleansed record.
+     */
+    private AssetFinderExtractionCountResponse buildExtractionCountResponse(CleansedDataStore cleansed) {
+        AssetFinderExtractionCountResponse response = new AssetFinderExtractionCountResponse();
+        response.setCleansedDataStoreId(cleansed.getId());
+        response.setRawDataId(cleansed.getRawDataId());
+        response.setSourceUri(cleansed.getSourceUri());
+        response.setSourceVersion(cleansed.getVersion());
+        response.setAssetFinderEnabled(assetFinderEnabled);
+        boolean tableAvailable = isTablePresent();
+        response.setTablePresent(tableAvailable);
+
+        long count = 0L;
+        if (assetFinderEnabled && tableAvailable && cleansed.getRawDataId() != null) {
+            try {
+                count = assetImageStoreRepository.countByRawDataId(cleansed.getRawDataId());
+            } catch (Exception e) {
+                logger.warn("Unable to count extracted asset rows for rawDataId {}: {}",
+                        cleansed.getRawDataId(), e.getMessage());
+            }
+        }
+        response.setAssetCount(count);
+        return response;
     }
 
     /**

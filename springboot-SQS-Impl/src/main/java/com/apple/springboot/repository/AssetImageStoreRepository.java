@@ -20,6 +20,11 @@ public interface AssetImageStoreRepository extends JpaRepository<AssetImageStore
     void deleteByRawDataId(UUID rawDataId);
 
     /**
+     * Counts extracted asset rows for a raw_data_store record.
+     */
+    long countByRawDataId(UUID rawDataId);
+
+    /**
      * Performs Asset Finder filtering with optional exact-match filters.
      */
     @Query(

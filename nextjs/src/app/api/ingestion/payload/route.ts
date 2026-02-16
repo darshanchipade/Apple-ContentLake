@@ -18,6 +18,31 @@ const safeParse = (payload: string) => {
   }
 };
 
+const normalizeMetadataValue = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+};
+
+const extractMetadata = (incoming: unknown) => {
+  if (!incoming || typeof incoming !== "object") {
+    return null;
+  }
+  const record = incoming as Record<string, unknown>;
+  if (!record.metadata || typeof record.metadata !== "object") {
+    return null;
+  }
+  const metadata = record.metadata as Record<string, unknown>;
+  return {
+    tenant: normalizeMetadataValue(metadata.tenant),
+    environment: normalizeMetadataValue(metadata.environment),
+    project: normalizeMetadataValue(metadata.project),
+    site: normalizeMetadataValue(metadata.site),
+    geo: normalizeMetadataValue(metadata.geo),
+    locale: normalizeMetadataValue(metadata.locale),
+  };
+};
+
 export async function POST(request: NextRequest) {
   if (!backendBaseUrl) {
     return NextResponse.json(
@@ -58,6 +83,14 @@ export async function POST(request: NextRequest) {
 
   try {
     const targetUrl = new URL("/api/ingest-json-payload", backendBaseUrl);
+    const metadata = extractMetadata(incoming);
+    if (metadata) {
+      Object.entries(metadata).forEach(([key, value]) => {
+        if (value) {
+          targetUrl.searchParams.set(key, value);
+        }
+      });
+    }
     const upstream = await fetch(targetUrl, {
       method: "POST",
       headers: {

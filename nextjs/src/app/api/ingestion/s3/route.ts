@@ -10,6 +10,12 @@ const safeParse = (payload: string) => {
   }
 };
 
+const normalizeMetadataValue = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+};
+
 const extractSourceUri = (payload: unknown): string | null => {
   if (typeof payload === "string") {
     const trimmed = payload.trim();
@@ -56,11 +62,22 @@ export async function POST(request: NextRequest) {
   }
 
   const url = new URL(
-    `/api/extract-cleanse-enrich-and-store?${new URLSearchParams({
-      sourceUri,
-    }).toString()}`,
+    "/api/extract-cleanse-enrich-and-store",
     backendBaseUrl,
   );
+  url.searchParams.set("sourceUri", sourceUri);
+  if (typeof incoming === "object" && incoming !== null) {
+    const metadata = (incoming as Record<string, unknown>).metadata;
+    if (metadata && typeof metadata === "object") {
+      const metadataRecord = metadata as Record<string, unknown>;
+      for (const key of ["tenant", "environment", "project", "site", "geo", "locale"]) {
+        const value = normalizeMetadataValue(metadataRecord[key]);
+        if (value) {
+          url.searchParams.set(key, value);
+        }
+      }
+    }
+  }
 
   try {
     const upstream = await fetch(url, { method: "GET" });

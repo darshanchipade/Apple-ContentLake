@@ -16,6 +16,16 @@ import {
 } from "@/lib/upload-history";
 import { formatBytes } from "@/lib/format";
 
+type AssetExtractionCount = {
+  cleansedDataStoreId?: string;
+  rawDataId?: string;
+  sourceUri?: string;
+  sourceVersion?: number;
+  assetCount?: number;
+  assetFinderEnabled?: boolean;
+  tablePresent?: boolean;
+};
+
 const statusStyles = {
   uploading: {
     label: "Uploading",
@@ -42,6 +52,9 @@ export default function UploadActivityPage() {
   const [activeUploadId, setActiveUploadId] = useState<string | null>(null);
   const [downloadInFlight, setDownloadInFlight] = useState<string | null>(null);
   const [historyHydrated, setHistoryHydrated] = useState(false);
+  const [assetCount, setAssetCount] = useState<AssetExtractionCount | null>(null);
+  const [assetCountLoading, setAssetCountLoading] = useState(false);
+  const [assetCountError, setAssetCountError] = useState<string | null>(null);
 
   useEffect(() => {
     const history = readUploadHistory();
@@ -66,6 +79,72 @@ export default function UploadActivityPage() {
       setActiveUploadId(uploads[0].id);
     }
   }, [uploads, activeUploadId]);
+
+  useEffect(() => {
+    const cleansedId = activeUpload?.cleansedId;
+    if (!cleansedId) {
+      setAssetCount(null);
+      setAssetCountLoading(false);
+      setAssetCountError(null);
+      return;
+    }
+
+    let cancelled = false;
+    const loadAssetCount = async () => {
+      setAssetCountLoading(true);
+      setAssetCountError(null);
+      try {
+        const response = await fetch(
+          `/api/asset-finder/count/by-cleansed/${encodeURIComponent(cleansedId)}`,
+        );
+        const payload = await response.json();
+        if (!response.ok) {
+          const message =
+            payload?.error ??
+            (typeof payload?.body === "object" && payload.body !== null
+              ? (payload.body as Record<string, unknown>).error
+              : null) ??
+            "Unable to load extracted asset count.";
+          throw new Error(typeof message === "string" ? message : "Unable to load extracted asset count.");
+        }
+        const body =
+          typeof payload?.body === "object" && payload.body !== null
+            ? (payload.body as Record<string, unknown>)
+            : (payload as Record<string, unknown>);
+        if (cancelled) return;
+        setAssetCount({
+          cleansedDataStoreId:
+            typeof body.cleansedDataStoreId === "string" ? body.cleansedDataStoreId : undefined,
+          rawDataId: typeof body.rawDataId === "string" ? body.rawDataId : undefined,
+          sourceUri: typeof body.sourceUri === "string" ? body.sourceUri : undefined,
+          sourceVersion:
+            typeof body.sourceVersion === "number" ? body.sourceVersion : undefined,
+          assetCount: typeof body.assetCount === "number" ? body.assetCount : undefined,
+          assetFinderEnabled:
+            typeof body.assetFinderEnabled === "boolean"
+              ? body.assetFinderEnabled
+              : undefined,
+          tablePresent: typeof body.tablePresent === "boolean" ? body.tablePresent : undefined,
+        });
+      } catch (error) {
+        if (!cancelled) {
+          setAssetCount(null);
+          setAssetCountError(
+            error instanceof Error ? error.message : "Unable to load extracted asset count.",
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setAssetCountLoading(false);
+        }
+      }
+    };
+
+    loadAssetCount();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeUpload?.cleansedId]);
 
   const handleDeleteUpload = (uploadId: string) => {
     setUploads((previous) => {
@@ -286,7 +365,37 @@ export default function UploadActivityPage() {
                     {activeUpload.backendStatus ?? "—"}
                   </dd>
                 </div>
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-slate-400">
+                    Asset rows extracted
+                  </dt>
+                  <dd className="text-sm font-semibold text-slate-900 break-all">
+                    {assetCountLoading ? "Loading..." : assetCount?.assetCount ?? "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-slate-400">Raw Data ID</dt>
+                  <dd className="text-sm font-semibold text-slate-900 break-all">
+                    {assetCount?.rawDataId ?? "—"}
+                  </dd>
+                </div>
               </dl>
+              {assetCountError && (
+                <p className="text-xs font-medium text-rose-600">{assetCountError}</p>
+              )}
+              {!assetCountLoading && assetCount && assetCount.assetFinderEnabled === false && (
+                <p className="text-xs font-medium text-amber-700">
+                  Asset Finder extraction is currently disabled on backend.
+                </p>
+              )}
+              {!assetCountLoading &&
+                assetCount &&
+                assetCount.assetFinderEnabled !== false &&
+                assetCount.tablePresent === false && (
+                  <p className="text-xs font-medium text-amber-700">
+                    Asset table is not available yet in the current database schema.
+                  </p>
+                )}
             </div>
           ) : (
             <div className="mt-10 rounded-2xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-500">

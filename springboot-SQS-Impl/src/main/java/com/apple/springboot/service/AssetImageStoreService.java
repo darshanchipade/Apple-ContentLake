@@ -407,6 +407,9 @@ public class AssetImageStoreService {
         Map<String, Object> metadataMap = objectMapper.convertValue(
                 assetNode, new TypeReference<Map<String, Object>>() {}
         );
+        // Path belongs to occurrence context; remove from canonical catalog payload.
+        Map<String, Object> canonicalCatalogMetadata = new LinkedHashMap<>(metadataMap);
+        canonicalCatalogMetadata.remove("_path");
 
         ResolvedMetadata resolved = resolveMetadata(requestMetadata, assetNodePath, publicInteractivePath);
         if (resolved.locale() == null) {
@@ -417,7 +420,7 @@ public class AssetImageStoreService {
             );
         }
 
-        String metadataJson = serializeJson(metadataMap);
+        String metadataJson = serializeJson(canonicalCatalogMetadata);
         String viewportsJson = serializeJson(viewportMap);
         String metadataHash = hashString(String.join("|",
                 Optional.ofNullable(assetKey).orElse(""),
@@ -1011,8 +1014,8 @@ public class AssetImageStoreService {
      */
     boolean areTablesPresent() {
         Boolean cached = tablesPresent;
-        if (cached != null) {
-            return cached;
+        if (Boolean.TRUE.equals(cached)) {
+            return true;
         }
         boolean catalogPresent = false;
         boolean occurrencePresent = false;
@@ -1034,8 +1037,11 @@ public class AssetImageStoreService {
         } catch (Exception ignored) {
             occurrencePresent = false;
         }
-        tablesPresent = catalogPresent && occurrencePresent;
-        return tablesPresent;
+        boolean present = catalogPresent && occurrencePresent;
+        if (present) {
+            tablesPresent = true;
+        }
+        return present;
     }
 
     private record SectionContext(String path, String uri) {}

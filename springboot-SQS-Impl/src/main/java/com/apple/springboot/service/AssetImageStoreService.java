@@ -189,10 +189,16 @@ public class AssetImageStoreService {
         }
 
         Set<String> sites = new LinkedHashSet<>(DEFAULT_SITES);
-        sites.addAll(assetImageStoreRepository.findDistinctSites().stream()
-                .filter(Objects::nonNull)
-                .map(v -> v.toLowerCase(Locale.ROOT))
-                .toList());
+        if (isTablePresent()) {
+            try {
+                sites.addAll(assetImageStoreRepository.findDistinctSites().stream()
+                        .filter(Objects::nonNull)
+                        .map(v -> v.toLowerCase(Locale.ROOT))
+                        .toList());
+            } catch (Exception e) {
+                logger.warn("Unable to load distinct asset sites; using defaults. Reason: {}", e.getMessage());
+            }
+        }
         String configuredSite = normalizeText(defaultSite);
         if (configuredSite != null) {
             sites.add(configuredSite.toLowerCase(Locale.ROOT));
@@ -264,7 +270,7 @@ public class AssetImageStoreService {
             detail.setSectionPath(asset.getSectionPath());
             detail.setSectionUri(asset.getSectionUri());
             detail.setAssetNodePath(asset.getAssetNodePath());
-            detail.setInteractivePath(asset.getInteractivePath());
+            detail.setInteractivePath(toApplePublicUrl(asset.getInteractivePath()));
             detail.setPreviewUri(asset.getPreviewUri());
             detail.setAltText(asset.getAltText());
             detail.setAccessibilityText(asset.getAccessibilityText());
@@ -410,7 +416,7 @@ public class AssetImageStoreService {
         record.setSectionPath(sectionContext.path());
         record.setSectionUri(sectionContext.uri());
         record.setPreviewUri(previewUri);
-        record.setInteractivePath(interactivePath);
+        record.setInteractivePath(toApplePublicUrl(interactivePath));
         record.setAltText(altText);
         record.setAccessibilityText(accessibilityText);
         record.setRequestMetadataJson(serializeJson(requestMetadata != null ? requestMetadata.toMap() : Map.of()));
@@ -663,7 +669,7 @@ public class AssetImageStoreService {
         tile.setAssetModel(item.getAssetModel());
         tile.setSectionPath(item.getSectionPath());
         tile.setSectionUri(item.getSectionUri());
-        tile.setInteractivePath(item.getInteractivePath());
+        tile.setInteractivePath(toApplePublicUrl(item.getInteractivePath()));
         tile.setPreviewUri(item.getPreviewUri());
         tile.setLocale(item.getLocale());
         tile.setSite(item.getSite());
@@ -872,6 +878,23 @@ public class AssetImageStoreService {
     private String normalizeGeo(String geo) {
         String normalized = normalizeText(geo);
         return normalized != null ? normalized.toUpperCase(Locale.ROOT) : null;
+    }
+
+    /**
+     * Prefixes relative asset paths with http://www.apple.com for UI links.
+     */
+    private String toApplePublicUrl(String rawPath) {
+        String normalized = normalizeText(rawPath);
+        if (normalized == null) {
+            return null;
+        }
+        if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
+            return normalized;
+        }
+        if (normalized.startsWith("/")) {
+            return "http://www.apple.com" + normalized;
+        }
+        return "http://www.apple.com/" + normalized;
     }
 
     /**

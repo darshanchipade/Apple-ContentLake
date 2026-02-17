@@ -63,30 +63,6 @@ type ApiFeedback = {
   message?: string;
 };
 
-type UploadRequestMetadata = {
-  tenant: string;
-  environment: string;
-  project: string;
-  site: string;
-  geo: string;
-  locale: string;
-};
-
-const DEFAULT_UPLOAD_REQUEST_METADATA: UploadRequestMetadata = {
-  tenant: "applecom-cms",
-  environment: "stage",
-  project: "rome",
-  site: "ipad",
-  geo: "WW",
-  locale: "en_US",
-};
-
-const GEO_TO_LOCALE: Record<string, string> = {
-  WW: "en_US",
-  JP: "ja_JP",
-  KR: "ko_KR",
-};
-
 const uploadTabs = [
   {
     id: "local" as const,
@@ -241,42 +217,6 @@ export default function IngestionPage() {
   const [apiFeedback, setApiFeedback] = useState<ApiFeedback>({ state: "idle" });
   const [s3Feedback, setS3Feedback] = useState<ApiFeedback>({ state: "idle" });
   const [extracting, setExtracting] = useState(false);
-  const [uploadRequestMetadata, setUploadRequestMetadata] = useState<UploadRequestMetadata>(
-    DEFAULT_UPLOAD_REQUEST_METADATA,
-  );
-
-  const normalizedUploadRequestMetadata = useMemo(() => {
-    const normalizedGeo = uploadRequestMetadata.geo.trim().toUpperCase() || "WW";
-    const localeFromGeo = GEO_TO_LOCALE[normalizedGeo];
-    const normalizedLocale =
-      uploadRequestMetadata.locale.trim() || localeFromGeo || DEFAULT_UPLOAD_REQUEST_METADATA.locale;
-    return {
-      tenant: uploadRequestMetadata.tenant.trim() || DEFAULT_UPLOAD_REQUEST_METADATA.tenant,
-      environment:
-        uploadRequestMetadata.environment.trim() || DEFAULT_UPLOAD_REQUEST_METADATA.environment,
-      project: uploadRequestMetadata.project.trim() || DEFAULT_UPLOAD_REQUEST_METADATA.project,
-      site: uploadRequestMetadata.site.trim() || DEFAULT_UPLOAD_REQUEST_METADATA.site,
-      geo: normalizedGeo,
-      locale: normalizedLocale,
-    };
-  }, [uploadRequestMetadata]);
-
-  const updateUploadRequestMetadata = (
-    field: keyof UploadRequestMetadata,
-    value: string,
-  ) => {
-    setUploadRequestMetadata((previous) => {
-      const next = { ...previous, [field]: value };
-      if (field === "geo") {
-        const normalizedGeo = value.trim().toUpperCase();
-        const mappedLocale = GEO_TO_LOCALE[normalizedGeo];
-        if (mappedLocale) {
-          next.locale = mappedLocale;
-        }
-      }
-      return next;
-    });
-  };
 
   const filteredTree = useMemo(
     () => filterTree(treeNodes, searchQuery),
@@ -486,9 +426,6 @@ export default function IngestionPage() {
     try {
       const formData = new FormData();
       formData.append("file", localFile);
-      Object.entries(normalizedUploadRequestMetadata).forEach(([key, value]) => {
-        formData.append(key, value);
-      });
 
       const response = await fetch("/api/ingestion/upload", {
         method: "POST",
@@ -515,7 +452,6 @@ export default function IngestionPage() {
                   filenameLocale ??
                   details.locale ??
                   payloadLocale ??
-                  normalizedUploadRequestMetadata.locale ??
                   item.locale,
                 pageId: payloadPageId ?? details.pageId ?? item.pageId,
               }
@@ -544,8 +480,7 @@ export default function IngestionPage() {
         locale:
           filenameLocale ??
           details.locale ??
-          payloadLocale ??
-          normalizedUploadRequestMetadata.locale,
+          payloadLocale,
         pageId: payloadPageId ?? details.pageId,
       };
       const snapshotId = details.cleansedId ?? uploadId;
@@ -634,7 +569,7 @@ export default function IngestionPage() {
           source: "API",
           status: "uploading",
           createdAt: Date.now(),
-          locale: payloadMetadata.locale ?? normalizedUploadRequestMetadata.locale,
+          locale: payloadMetadata.locale,
           pageId: payloadMetadata.pageId,
         },
         ...previous,
@@ -651,10 +586,7 @@ export default function IngestionPage() {
       const response = await fetch("/api/ingestion/payload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          payload: parsed,
-          metadata: normalizedUploadRequestMetadata,
-        }),
+        body: JSON.stringify({ payload: parsed }),
       });
       const payload = await response.json();
       const details = parseBackendPayload(payload);
@@ -676,7 +608,6 @@ export default function IngestionPage() {
                 locale:
                   payloadMetadata.locale ??
                   details.locale ??
-                  normalizedUploadRequestMetadata.locale ??
                   upload.locale,
                 pageId: payloadMetadata.pageId ?? details.pageId ?? upload.pageId,
               }
@@ -711,8 +642,7 @@ export default function IngestionPage() {
         sourceType,
         locale:
           payloadMetadata.locale ??
-          details.locale ??
-          normalizedUploadRequestMetadata.locale,
+          details.locale,
         pageId: payloadMetadata.pageId ?? details.pageId,
       };
       const snapshotId = details.cleansedId ?? uploadId;
@@ -789,7 +719,6 @@ export default function IngestionPage() {
         source: "S3",
         status: "uploading",
         createdAt: Date.now(),
-        locale: normalizedUploadRequestMetadata.locale,
       },
       ...previous,
     ]);
@@ -797,10 +726,7 @@ export default function IngestionPage() {
     const response = await fetch("/api/ingestion/s3", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sourceUri: normalized,
-        metadata: normalizedUploadRequestMetadata,
-      }),
+      body: JSON.stringify({ sourceUri: normalized }),
     });
     const payload = await response.json();
     const details = parseBackendPayload(payload);
@@ -821,7 +747,6 @@ export default function IngestionPage() {
               sourceType,
               locale:
                 details.locale ??
-                normalizedUploadRequestMetadata.locale ??
                 upload.locale,
               pageId: details.pageId ?? upload.pageId,
             }
@@ -854,7 +779,7 @@ export default function IngestionPage() {
       uploadedAt: Date.now(),
       sourceIdentifier,
       sourceType,
-      locale: details.locale ?? normalizedUploadRequestMetadata.locale,
+      locale: details.locale,
       pageId: details.pageId,
     };
     const snapshotId = details.cleansedId ?? uploadId;
@@ -1184,95 +1109,6 @@ export default function IngestionPage() {
                     </button>
                   );
                 })}
-              </div>
-
-              <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
-                <div className="mb-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-400 font-bold">
-                    Upload Request Metadata
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    Stored with extracted image assets for Asset Finder filters.
-                  </p>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  <label className="text-xs font-semibold text-slate-600">
-                    Tenant
-                    <input
-                      type="text"
-                      value={uploadRequestMetadata.tenant}
-                      onChange={(event) =>
-                        updateUploadRequestMetadata("tenant", event.target.value)
-                      }
-                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
-                    />
-                  </label>
-                  <label className="text-xs font-semibold text-slate-600">
-                    Environment
-                    <select
-                      value={uploadRequestMetadata.environment}
-                      onChange={(event) =>
-                        updateUploadRequestMetadata("environment", event.target.value)
-                      }
-                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
-                    >
-                      {["stage", "prod", "qa"].map((value) => (
-                        <option key={value} value={value}>
-                          {value}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="text-xs font-semibold text-slate-600">
-                    Project
-                    <input
-                      type="text"
-                      value={uploadRequestMetadata.project}
-                      onChange={(event) =>
-                        updateUploadRequestMetadata("project", event.target.value)
-                      }
-                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
-                    />
-                  </label>
-                  <label className="text-xs font-semibold text-slate-600">
-                    Site / Page
-                    <input
-                      type="text"
-                      value={uploadRequestMetadata.site}
-                      onChange={(event) =>
-                        updateUploadRequestMetadata("site", event.target.value)
-                      }
-                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
-                    />
-                  </label>
-                  <label className="text-xs font-semibold text-slate-600">
-                    Geo / Region
-                    <select
-                      value={uploadRequestMetadata.geo}
-                      onChange={(event) =>
-                        updateUploadRequestMetadata("geo", event.target.value)
-                      }
-                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
-                    >
-                      {["WW", "JP", "KR"].map((value) => (
-                        <option key={value} value={value}>
-                          {value}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="text-xs font-semibold text-slate-600">
-                    Locale
-                    <input
-                      type="text"
-                      value={uploadRequestMetadata.locale}
-                      onChange={(event) =>
-                        updateUploadRequestMetadata("locale", event.target.value)
-                      }
-                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
-                    />
-                  </label>
-                </div>
               </div>
 
               {activeTab === "local" && (

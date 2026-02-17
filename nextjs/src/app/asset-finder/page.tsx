@@ -112,8 +112,22 @@ const normalizeUpstreamBody = <T,>(payload: unknown): T | null => {
 const normalizeAssetPath = (path: string | undefined) => {
   if (!path) return undefined;
   if (path.startsWith("http://") || path.startsWith("https://")) return path;
-  if (path.startsWith("/")) return path;
-  return `/${path}`;
+  if (path.startsWith("/")) return `http://www.apple.com${path}`;
+  return `http://www.apple.com/${path}`;
+};
+
+const safeParsePayload = (raw: string): unknown => {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+};
+
+const parseProxyPayload = async <T,>(response: Response): Promise<T | null> => {
+  const raw = await response.text();
+  const parsed = safeParsePayload(raw);
+  return normalizeUpstreamBody<T>(parsed);
 };
 
 function TilePreview({ path, label }: { path?: string; label: string }) {
@@ -159,11 +173,11 @@ export default function AssetFinderPage() {
       setError(null);
       try {
         const response = await fetch("/api/asset-finder/options");
-        const payload = await response.json();
+        const payload = await parseProxyPayload<AssetFinderOptions>(response);
         if (!response.ok) {
-          throw new Error(payload?.error ?? "Unable to load Asset Finder options.");
+          throw new Error("Unable to load Asset Finder options.");
         }
-        const parsed = normalizeUpstreamBody<AssetFinderOptions>(payload) ?? DEFAULT_OPTIONS;
+        const parsed = payload ?? DEFAULT_OPTIONS;
         if (!active) return;
         setOptions({
           tenants: parsed.tenants?.length ? parsed.tenants : DEFAULT_OPTIONS.tenants,
@@ -208,12 +222,11 @@ export default function AssetFinderPage() {
           size: 120,
         }),
       });
-      const payload = await response.json();
+      const payload = await parseProxyPayload<AssetFinderSearchResponse>(response);
       if (!response.ok) {
-        throw new Error(payload?.error ?? "Asset Finder query failed.");
+        throw new Error("Asset Finder query failed.");
       }
-      const parsed = normalizeUpstreamBody<AssetFinderSearchResponse>(payload);
-      setResults(parsed ?? { count: 0, page: 0, size: 120, totalPages: 0, items: [] });
+      setResults(payload ?? { count: 0, page: 0, size: 120, totalPages: 0, items: [] });
     } catch (filterError) {
       setResults(null);
       setError(filterError instanceof Error ? filterError.message : "Asset Finder query failed.");
@@ -233,12 +246,11 @@ export default function AssetFinderPage() {
     setDetailError(null);
     try {
       const response = await fetch(`/api/asset-finder/assets/${encodeURIComponent(assetId)}`);
-      const payload = await response.json();
+      const payload = await parseProxyPayload<AssetFinderDetail>(response);
       if (!response.ok) {
-        throw new Error(payload?.error ?? "Unable to load asset metadata.");
+        throw new Error("Unable to load asset metadata.");
       }
-      const parsed = normalizeUpstreamBody<AssetFinderDetail>(payload);
-      setDetail(parsed);
+      setDetail(payload);
     } catch (loadError) {
       setDetail(null);
       setDetailError(loadError instanceof Error ? loadError.message : "Unable to load asset metadata.");
@@ -400,10 +412,7 @@ export default function AssetFinderPage() {
                   label={tile.altText ?? tile.assetKey ?? "Asset preview"}
                 />
                 <div className="p-3">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-slate-900 truncate">
-                      {tile.assetKey ?? "asset"}
-                    </p>
+                  <div className="mb-2 flex items-center justify-end">
                     <button
                       type="button"
                       onClick={() => openDetail(tile.id)}
@@ -415,14 +424,14 @@ export default function AssetFinderPage() {
                   </div>
                   <p className="text-xs text-slate-500 break-all">
                     Interactive Path:{" "}
-                    {tile.interactivePath ? (
+                    {normalizeAssetPath(tile.interactivePath) ? (
                       <a
                         href={normalizeAssetPath(tile.interactivePath)}
                         className="text-blue-700 underline"
                         target="_blank"
                         rel="noreferrer"
                       >
-                        {tile.interactivePath}
+                        {normalizeAssetPath(tile.interactivePath)}
                       </a>
                     ) : (
                       "—"
@@ -503,19 +512,20 @@ export default function AssetFinderPage() {
                             (viewportValue?.uri2x as string | undefined) ??
                             (viewportValue?._uri_path as string | undefined) ??
                             (viewportValue?._uri1x_path as string | undefined);
-                          const thumbnail = normalizeAssetPath(pathCandidate);
+                          const interactivePath = normalizeAssetPath(pathCandidate);
+                          const thumbnail = interactivePath;
                           return (
                             <tr key={viewport} className="border-t border-slate-100 align-top">
                               <td className="px-3 py-2 font-medium text-slate-800">{viewport}</td>
                               <td className="px-3 py-2">
-                                {pathCandidate ? (
+                                {interactivePath ? (
                                   <a
-                                    href={thumbnail}
+                                    href={interactivePath}
                                     target="_blank"
                                     rel="noreferrer"
                                     className="break-all text-blue-700 underline"
                                   >
-                                    {pathCandidate}
+                                    {interactivePath}
                                   </a>
                                 ) : (
                                   "—"

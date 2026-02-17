@@ -128,16 +128,48 @@ public class AssetImageStoreService {
         try {
             UploadRequestMetadata requestMetadata = parseRequestMetadata(rawDataStore.getSourceRequestMetadata());
             List<AssetImageStore> extracted = extractAssets(rootNode, rawDataStore, requestMetadata);
-            assetImageStoreRepository.deleteByRawDataId(rawDataStore.getId());
-            if (!extracted.isEmpty()) {
-                assetImageStoreRepository.saveAll(extracted);
+            List<AssetImageStore> deduplicated = deduplicateExtractedAssets(extracted);
+
+            // Replace the full snapshot for this source/version to avoid stale collisions on resume/replay.
+            if (rawDataStore.getSourceUri() != null && rawDataStore.getVersion() != null) {
+                assetImageStoreRepository.deleteBySourceUriAndSourceVersion(
+                        rawDataStore.getSourceUri(), rawDataStore.getVersion()
+                );
+            } else {
+                assetImageStoreRepository.deleteByRawDataId(rawDataStore.getId());
             }
-            logger.info("Asset metadata extraction complete for rawDataId {}. Persisted {} image records.",
-                    rawDataStore.getId(), extracted.size());
+
+            if (!deduplicated.isEmpty()) {
+                assetImageStoreRepository.saveAll(deduplicated);
+                // Force DB constraint checks inside this guarded block.
+                assetImageStoreRepository.flush();
+            }
+            logger.info("Asset metadata extraction complete for rawDataId {}. Persisted {} image records ({} pre-dedupe).",
+                    rawDataStore.getId(), deduplicated.size(), extracted.size());
         } catch (Exception e) {
             logger.warn("Asset metadata extraction failed for rawDataId {}. Continuing ingestion pipeline. Reason: {}",
                     rawDataStore.getId(), e.getMessage());
         }
+    }
+
+    /**
+     * Removes duplicate rows that would collide on (source_uri, source_version, asset_hash).
+     */
+    private List<AssetImageStore> deduplicateExtractedAssets(List<AssetImageStore> extracted) {
+        if (extracted == null || extracted.isEmpty()) {
+            return List.of();
+        }
+        Map<String, AssetImageStore> deduped = new LinkedHashMap<>();
+        for (AssetImageStore item : extracted) {
+            if (item == null) continue;
+            String key = String.join("|",
+                    Optional.ofNullable(item.getSourceUri()).orElse(""),
+                    Optional.ofNullable(item.getSourceVersion()).map(String::valueOf).orElse(""),
+                    Optional.ofNullable(item.getAssetHash()).orElse("")
+            );
+            deduped.putIfAbsent(key, item);
+        }
+        return new ArrayList<>(deduped.values());
     }
 
     /**

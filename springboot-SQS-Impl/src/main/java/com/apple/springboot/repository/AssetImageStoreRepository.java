@@ -20,6 +20,11 @@ public interface AssetImageStoreRepository extends JpaRepository<AssetImageStore
     void deleteByRawDataId(UUID rawDataId);
 
     /**
+     * Deletes extracted rows for a source/version pair.
+     */
+    void deleteBySourceUriAndSourceVersion(String sourceUri, Integer sourceVersion);
+
+    /**
      * Counts extracted asset rows for a raw_data_store record.
      */
     long countByRawDataId(UUID rawDataId);

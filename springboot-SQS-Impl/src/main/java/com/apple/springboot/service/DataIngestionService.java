@@ -577,8 +577,13 @@ public class DataIngestionService {
                                                    @Nullable CleansedDataStore existingCleansed) throws JsonProcessingException {
         try {
             JsonNode rootNode = objectMapper.readTree(rawJsonContent);
-            // Asset extraction is additive and fail-open; it does not affect text pipeline status.
-            assetImageStoreService.safeExtractAndStore(rootNode, rawDataStore);
+            // Asset extraction is additive and fail-open; it must never break text ingestion.
+            try {
+                assetImageStoreService.safeExtractAndStore(rootNode, rawDataStore);
+            } catch (Exception assetError) {
+                logger.warn("Asset metadata extraction failed for raw_data_id {}. Continuing ingestion. Reason: {}",
+                        rawDataStore.getId(), assetError.getMessage());
+            }
             List<Map<String, Object>> allExtractedItems = new ArrayList<>();
             Envelope rootEnvelope = new Envelope();
             rootEnvelope.setSourcePath(rawDataStore.getSourceUri());

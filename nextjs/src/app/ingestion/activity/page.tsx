@@ -212,7 +212,7 @@ export default function UploadActivityPage() {
         </div>
 
       <main className="mx-auto grid gap-6 lg:gap-8 lg:grid-cols-[1fr_400px] items-start">
-        <section className="rounded-3xl border border-slate-200 bg-white shadow-sm flex flex-col h-[500px] lg:h-auto lg:min-h-[600px] overflow-hidden">
+        <section className="rounded-3xl border border-slate-200 bg-white shadow-sm flex flex-col h-[500px] lg:h-[78vh] lg:max-h-[760px] overflow-hidden">
           <div className="p-5 lg:p-6 border-b border-slate-100 flex items-center justify-between gap-3">
             <div>
               <h2 className="text-lg font-bold text-gray-900">Upload History</h2>
@@ -224,7 +224,7 @@ export default function UploadActivityPage() {
             </div>
           </div>
 
-          <div className="p-4 lg:p-6 space-y-4 overflow-y-auto custom-scrollbar flex-1">
+          <div className="p-4 lg:p-6 space-y-4 overflow-y-auto custom-scrollbar flex-1 min-h-0">
             {uploads.length === 0 && (
               <div className="rounded-2xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-500">
                 Uploads will appear here once you submit files from the ingestion screen.

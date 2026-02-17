@@ -102,7 +102,13 @@ public class DataExtractionController {
     @PostMapping("/extract-cleanse-enrich-and-store")
     public ResponseEntity<String> extractCleanseEnrichAndStore(
             @Parameter(description = "The JSON file to upload.", required = true)
-            @RequestParam("file") MultipartFile file) {
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "tenant", required = false) String tenant,
+            @RequestParam(value = "environment", required = false) String environment,
+            @RequestParam(value = "project", required = false) String project,
+            @RequestParam(value = "site", required = false) String site,
+            @RequestParam(value = "geo", required = false) String geo,
+            @RequestParam(value = "locale", required = false) String locale) {
 
         if (file.isEmpty()) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("File is empty");
@@ -113,7 +119,7 @@ public class DataExtractionController {
 
         try {
             String content = new String(file.getBytes());
-            CleansedDataStore cleansedDataEntry = dataIngestionService.ingestAndCleanseJsonPayload(content, sourceIdentifier);
+            CleansedDataStore cleansedDataEntry = dataIngestionService.ingestAndCleanseJsonPayload(content, sourceIdentifier, tenant, environment, project, site, geo, locale);
             return handleCleansingOutcome(cleansedDataEntry, sourceIdentifier);
         } catch (IOException e) {
             logger.error("Error reading uploaded file", e);
@@ -162,7 +168,13 @@ public class DataExtractionController {
     @PostMapping("/ingest-json-payload")
     public ResponseEntity<String> ingestJsonPayload(
             @Parameter(description = "JSON payload to ingest and process", required = true)
-            @RequestBody String jsonPayload) {
+            @RequestBody String jsonPayload,
+            @RequestParam(value = "tenant", required = false) String tenant,
+            @RequestParam(value = "environment", required = false) String environment,
+            @RequestParam(value = "project", required = false) String project,
+            @RequestParam(value = "site", required = false) String site,
+            @RequestParam(value = "geo", required = false) String geo,
+            @RequestParam(value = "locale", required = false) String locale) {
         String sourceIdentifier = "api-payload-" + UUID.randomUUID().toString();
         logger.info("Received POST request to process JSON payload. Assigned sourceIdentifier: {}", sourceIdentifier);
         CleansedDataStore cleansedDataEntry = null;
@@ -173,7 +185,7 @@ public class DataExtractionController {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("JSON payload cannot be empty.");
             }
 
-            cleansedDataEntry = dataIngestionService.ingestAndCleanseJsonPayload(jsonPayload, sourceIdentifier);
+            cleansedDataEntry = dataIngestionService.ingestAndCleanseJsonPayload(jsonPayload, sourceIdentifier, tenant, environment, project, site, geo, locale);
             return handleCleansingOutcome(cleansedDataEntry, sourceIdentifier);
 
         } catch (IllegalArgumentException e) {

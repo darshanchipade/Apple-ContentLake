@@ -65,6 +65,7 @@ public class DataIngestionService {
     private final ContentHashRepository contentHashRepository;
     private final ItemVersionHashStore itemVersionHashStore;
     private final ContextUpdateService contextUpdateService;
+    private final AssetImageStoreService assetImageStoreService;
     private final Set<String> excludedItemTypes;
 
     // Configurable behavior flags
@@ -118,12 +119,14 @@ public class DataIngestionService {
                                 S3StorageService s3StorageService,
                                 @Value("${app.s3.bucket-name}") String defaultS3BucketName,
                                 ContextUpdateService contextUpdateService,
+                                AssetImageStoreService assetImageStoreService,
                                 @Value("${app.ingestion.excluded-item-types:}") String excludedItemTypesProperty) {
         this.rawDataStoreRepository = rawDataStoreRepository;
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.contentHashRepository = contentHashRepository;
         this.itemVersionHashStore = itemVersionHashStore;
         this.contextUpdateService = contextUpdateService;
+        this.assetImageStoreService = assetImageStoreService;
         this.objectMapper = objectMapper;
         this.resourceLoader = resourceLoader;
         this.jsonFilePath = jsonFilePath;
@@ -348,8 +351,10 @@ public class DataIngestionService {
      * Ingests a raw JSON payload and persists the cleansed result.
      */
     @Transactional
-    public CleansedDataStore ingestAndCleanseJsonPayload(String jsonPayload, String sourceIdentifier) throws JsonProcessingException {
-        RawDataStore rawDataStore = findOrCreateRawDataStore(jsonPayload, sourceIdentifier);
+    public CleansedDataStore ingestAndCleanseJsonPayload(String jsonPayload, String sourceIdentifier,
+                                                        String tenant, String environment, String project,
+                                                        String site, String geo, String locale) throws JsonProcessingException {
+        RawDataStore rawDataStore = findOrCreateRawDataStore(jsonPayload, sourceIdentifier, tenant, environment, project, site, geo, locale);
         if (rawDataStore == null) {
             return null;
         }
@@ -415,7 +420,9 @@ public class DataIngestionService {
     /**
      * Finds an existing RawDataStore or creates a new one for the payload.
      */
-    private RawDataStore findOrCreateRawDataStore(String jsonPayload, String sourceIdentifier) {
+    private RawDataStore findOrCreateRawDataStore(String jsonPayload, String sourceIdentifier,
+                                                  String tenant, String environment, String project,
+                                                  String site, String geo, String locale) {
         if (jsonPayload == null || jsonPayload.trim().isEmpty()) {
             throw new IllegalArgumentException("JSON payload cannot be null or empty for sourceIdentifier " + sourceIdentifier);
         }
@@ -438,7 +445,7 @@ public class DataIngestionService {
         rawDataStore.setStatus(resolveUploadStatus(sourceIdentifier));
         rawDataStore.setContentHash(newContentHash);
         rawDataStore.setLatest(true);
-        populatePayloadColumns(rawDataStore, jsonPayload);
+        populatePayloadColumns(rawDataStore, jsonPayload, tenant, environment, project, site, geo, locale);
 
         Optional<RawDataStore> latestVersionOpt = rawDataStoreRepository.findTopBySourceUriOrderByVersionDesc(sourceIdentifier);
         if (latestVersionOpt.isPresent()) {
@@ -460,11 +467,28 @@ public class DataIngestionService {
     /**
      * Populates raw data storage fields from the payload.
      */
-    private void populatePayloadColumns(RawDataStore rawDataStore, String jsonPayload) {
+    private void populatePayloadColumns(RawDataStore rawDataStore, String jsonPayload,
+                                        String tenant, String environment, String project,
+                                        String site, String geo, String locale) {
         rawDataStore.setRawContentText(jsonPayload);
         rawDataStore.setRawContentBinary(jsonPayload.getBytes(StandardCharsets.UTF_8));
         rawDataStore.setSourceContentType("application/json");
         rawDataStore.setSourceMetadata(extractSourceMetadata(jsonPayload));
+
+        if (tenant != null || environment != null || project != null || site != null || geo != null || locale != null) {
+            try {
+                ObjectNode meta = objectMapper.createObjectNode();
+                if (tenant != null) meta.put("tenant", tenant);
+                if (environment != null) meta.put("environment", environment);
+                if (project != null) meta.put("project", project);
+                if (site != null) meta.put("site", site);
+                if (geo != null) meta.put("geo", geo);
+                if (locale != null) meta.put("locale", locale);
+                rawDataStore.setSourceRequestMetadata(objectMapper.writeValueAsString(meta));
+            } catch (JsonProcessingException e) {
+                logger.warn("Failed to serialize request metadata", e);
+            }
+        }
     }
 
     /**
@@ -538,6 +562,13 @@ public class DataIngestionService {
                                                    RawDataStore rawDataStore,
                                                    @Nullable CleansedDataStore existingCleansed) throws JsonProcessingException {
         try {
+            // Extract and store image assets in a non-blocking way
+            try {
+                assetImageStoreService.extractAndStoreAssets(rawJsonContent, rawDataStore);
+            } catch (Exception e) {
+                logger.error("Non-blocking image asset extraction failed for raw data ID: {}. Error: {}", rawDataStore.getId(), e.getMessage());
+            }
+
             JsonNode rootNode = objectMapper.readTree(rawJsonContent);
             List<Map<String, Object>> allExtractedItems = new ArrayList<>();
             Envelope rootEnvelope = new Envelope();

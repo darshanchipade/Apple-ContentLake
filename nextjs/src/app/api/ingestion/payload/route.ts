@@ -58,6 +58,10 @@ export async function POST(request: NextRequest) {
 
   try {
     const targetUrl = new URL("/api/ingest-json-payload", backendBaseUrl);
+    request.nextUrl.searchParams.forEach((value, key) => {
+      targetUrl.searchParams.set(key, value);
+    });
+
     const upstream = await fetch(targetUrl, {
       method: "POST",
       headers: {

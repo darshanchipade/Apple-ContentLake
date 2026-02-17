@@ -9,6 +9,7 @@ import {
   CloudArrowUpIcon,
   HomeModernIcon,
   MagnifyingGlassIcon,
+  PhotoIcon,
   Squares2X2Icon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
@@ -30,6 +31,7 @@ const workspaceLinks = [
   { label: "Upload Activity", href: "/ingestion/activity", icon: CloudArrowUpIcon },
   { label: "Pipeline Health", href: "/extraction", icon: ArrowTrendingUpIcon },
   { label: "Search Finder", href: "/search", icon: MagnifyingGlassIcon },
+  { label: "Asset Finder", href: "/asset-finder", icon: PhotoIcon },
 ];
 
 export function PipelineShell({ currentStep, showTracker = true, children }: PipelineShellProps) {
@@ -55,6 +57,7 @@ export function PipelineShell({ currentStep, showTracker = true, children }: Pip
   const pageLabel = useMemo(() => {
     if (pathname === '/ingestion/activity') return 'Upload Activity';
     if (pathname === '/search') return 'Search Finder';
+    if (pathname === '/asset-finder') return 'Asset Finder';
 
     const stepLabels: Record<StepId, string> = {
       ingestion: 'Ingestion',

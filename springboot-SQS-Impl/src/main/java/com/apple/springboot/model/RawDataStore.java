@@ -31,6 +31,10 @@ public class RawDataStore {
     @Column(name = "source_metadata", columnDefinition = "jsonb")
     private String sourceMetadata; // Store as JSON string
 
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "source_request_metadata", columnDefinition = "jsonb")
+    private String sourceRequestMetadata;
+
     @Column(name = "received_at", nullable = false, updatable = false)
     private OffsetDateTime receivedAt;
 
@@ -78,6 +82,10 @@ public class RawDataStore {
      * Sets the extracted source metadata JSON.
      */
     public void setSourceMetadata(String sourceMetadata) { this.sourceMetadata = sourceMetadata; }
+
+    public String getSourceRequestMetadata() { return sourceRequestMetadata; }
+
+    public void setSourceRequestMetadata(String sourceRequestMetadata) { this.sourceRequestMetadata = sourceRequestMetadata; }
 
     /**
      * Sets the timestamp when the payload was received.

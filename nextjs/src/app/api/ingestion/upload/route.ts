@@ -25,6 +25,10 @@ export async function POST(request: NextRequest) {
       "/api/extract-cleanse-enrich-and-store",
       backendBaseUrl,
     );
+    request.nextUrl.searchParams.forEach((value, key) => {
+      targetUrl.searchParams.set(key, value);
+    });
+
     const upstream = await fetch(targetUrl, {
       method: "POST",
       body: formData,

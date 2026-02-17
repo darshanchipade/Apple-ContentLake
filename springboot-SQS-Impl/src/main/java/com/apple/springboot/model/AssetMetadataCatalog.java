@@ -19,75 +19,39 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 
 /**
- * Stores image/icon metadata extracted from uploaded JSON payloads for Asset Finder.
+ * Canonical image metadata catalog. Stores one row per unique metadata hash.
  */
 @Setter
 @Getter
 @Entity
 @Table(
-        name = "asset_image_store",
+        name = "asset_metadata_catalog",
         uniqueConstraints = {
                 @UniqueConstraint(
-                        name = "uk_asset_image_store_source_version_hash",
-                        columnNames = {"source_uri", "source_version", "asset_hash"}
+                        name = "uk_asset_metadata_catalog_metadata_hash",
+                        columnNames = {"metadata_hash"}
                 )
         },
         indexes = {
-                @Index(name = "idx_asset_image_store_raw_data_id", columnList = "raw_data_id"),
-                @Index(name = "idx_asset_image_store_source_uri_version", columnList = "source_uri,source_version"),
-                @Index(name = "idx_asset_image_store_filters", columnList = "tenant,environment,project,site,geo,locale"),
-                @Index(name = "idx_asset_image_store_section", columnList = "section_path"),
-                @Index(name = "idx_asset_image_store_created_at", columnList = "created_at")
+                @Index(name = "idx_asset_metadata_catalog_interactive", columnList = "interactive_path"),
+                @Index(name = "idx_asset_metadata_catalog_created_at", columnList = "created_at")
         }
 )
-public class AssetImageStore {
+public class AssetMetadataCatalog {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     @Column(updatable = false, nullable = false)
     private UUID id;
 
-    @Column(name = "raw_data_id", nullable = false)
-    private UUID rawDataId;
-
-    @Column(name = "source_uri", nullable = false, columnDefinition = "TEXT")
-    private String sourceUri;
-
-    @Column(name = "source_version")
-    private Integer sourceVersion;
-
-    @Column(name = "tenant", columnDefinition = "TEXT")
-    private String tenant;
-
-    @Column(name = "environment", columnDefinition = "TEXT")
-    private String environment;
-
-    @Column(name = "project", columnDefinition = "TEXT")
-    private String project;
-
-    @Column(name = "site", columnDefinition = "TEXT")
-    private String site;
-
-    @Column(name = "geo", columnDefinition = "TEXT")
-    private String geo;
-
-    @Column(name = "locale", columnDefinition = "TEXT")
-    private String locale;
+    @Column(name = "metadata_hash", nullable = false, columnDefinition = "TEXT")
+    private String metadataHash;
 
     @Column(name = "asset_key", nullable = false, columnDefinition = "TEXT")
     private String assetKey;
 
-    @Column(name = "asset_node_path", nullable = false, columnDefinition = "TEXT")
-    private String assetNodePath;
-
     @Column(name = "asset_model", columnDefinition = "TEXT")
     private String assetModel;
-
-    @Column(name = "section_path", columnDefinition = "TEXT")
-    private String sectionPath;
-
-    @Column(name = "section_uri", columnDefinition = "TEXT")
-    private String sectionUri;
 
     @Column(name = "interactive_path", columnDefinition = "TEXT")
     private String interactivePath;
@@ -108,13 +72,6 @@ public class AssetImageStore {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "asset_metadata_json", columnDefinition = "jsonb")
     private String assetMetadataJson;
-
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "request_metadata_json", columnDefinition = "jsonb")
-    private String requestMetadataJson;
-
-    @Column(name = "asset_hash", nullable = false, columnDefinition = "TEXT")
-    private String assetHash;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;

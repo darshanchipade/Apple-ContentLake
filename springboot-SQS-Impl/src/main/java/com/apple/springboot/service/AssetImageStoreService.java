@@ -6,11 +6,13 @@ import com.apple.springboot.dto.AssetFinderFilterRequest;
 import com.apple.springboot.dto.AssetFinderOptionsResponse;
 import com.apple.springboot.dto.AssetFinderSearchResponse;
 import com.apple.springboot.dto.AssetFinderTileDto;
-import com.apple.springboot.model.AssetImageStore;
+import com.apple.springboot.model.AssetMetadataCatalog;
+import com.apple.springboot.model.AssetMetadataOccurrence;
 import com.apple.springboot.model.CleansedDataStore;
 import com.apple.springboot.model.RawDataStore;
 import com.apple.springboot.model.UploadRequestMetadata;
-import com.apple.springboot.repository.AssetImageStoreRepository;
+import com.apple.springboot.repository.AssetMetadataCatalogRepository;
+import com.apple.springboot.repository.AssetMetadataOccurrenceRepository;
 import com.apple.springboot.repository.CleansedDataStoreRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -19,6 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -31,7 +34,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -44,9 +46,14 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Extracts image metadata from uploaded JSON and serves Asset Finder queries.
+ *
+ * Normalized design:
+ * - asset_metadata_catalog: canonical metadata rows deduplicated by metadata_hash.
+ * - asset_metadata_occurrence: per source/version occurrence rows referencing catalog_id.
  */
 @Service
 public class AssetImageStoreService {
@@ -68,7 +75,8 @@ public class AssetImageStoreService {
             "KR", List.of("ko_KR")
     );
 
-    private final AssetImageStoreRepository assetImageStoreRepository;
+    private final AssetMetadataCatalogRepository catalogRepository;
+    private final AssetMetadataOccurrenceRepository occurrenceRepository;
     private final CleansedDataStoreRepository cleansedDataStoreRepository;
     private final ObjectMapper objectMapper;
     private final JdbcTemplate jdbcTemplate;
@@ -95,16 +103,18 @@ public class AssetImageStoreService {
     private String defaultLocale;
 
     // Cached after first check. If schema changes while running, restart app.
-    private volatile Boolean tablePresent;
+    private volatile Boolean tablesPresent;
 
     /**
      * Creates a service for image extraction and Asset Finder access.
      */
-    public AssetImageStoreService(AssetImageStoreRepository assetImageStoreRepository,
+    public AssetImageStoreService(AssetMetadataCatalogRepository catalogRepository,
+                                  AssetMetadataOccurrenceRepository occurrenceRepository,
                                   CleansedDataStoreRepository cleansedDataStoreRepository,
                                   ObjectMapper objectMapper,
                                   JdbcTemplate jdbcTemplate) {
-        this.assetImageStoreRepository = assetImageStoreRepository;
+        this.catalogRepository = catalogRepository;
+        this.occurrenceRepository = occurrenceRepository;
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.objectMapper = objectMapper;
         this.jdbcTemplate = jdbcTemplate;
@@ -121,55 +131,57 @@ public class AssetImageStoreService {
         if (rootNode == null || rawDataStore == null || rawDataStore.getId() == null) {
             return;
         }
-        if (!isTablePresent()) {
+        if (!areTablesPresent()) {
             return;
         }
 
         try {
             UploadRequestMetadata requestMetadata = parseRequestMetadata(rawDataStore.getSourceRequestMetadata());
-            List<AssetImageStore> extracted = extractAssets(rootNode, rawDataStore, requestMetadata);
-            List<AssetImageStore> deduplicated = deduplicateExtractedAssets(extracted);
+            List<ExtractedAssetCandidate> extracted = extractAssets(rootNode, rawDataStore, requestMetadata);
+            List<ExtractedAssetCandidate> deduplicatedBySlot = deduplicateBySlot(extracted);
 
-            // Replace the full snapshot for this source/version to avoid stale collisions on resume/replay.
+            // Replace the full occurrence snapshot for this source/version to avoid replay collisions.
             if (rawDataStore.getSourceUri() != null && rawDataStore.getVersion() != null) {
-                assetImageStoreRepository.deleteBySourceUriAndSourceVersion(
+                occurrenceRepository.deleteBySourceUriAndSourceVersion(
                         rawDataStore.getSourceUri(), rawDataStore.getVersion()
                 );
             } else {
-                assetImageStoreRepository.deleteByRawDataId(rawDataStore.getId());
+                occurrenceRepository.deleteByRawDataId(rawDataStore.getId());
             }
 
-            if (!deduplicated.isEmpty()) {
-                assetImageStoreRepository.saveAll(deduplicated);
+            if (!deduplicatedBySlot.isEmpty()) {
+                List<AssetMetadataOccurrence> occurrences = new ArrayList<>(deduplicatedBySlot.size());
+                for (ExtractedAssetCandidate candidate : deduplicatedBySlot) {
+                    AssetMetadataCatalog catalog = upsertCatalog(candidate);
+                    AssetMetadataOccurrence occurrence = new AssetMetadataOccurrence();
+                    occurrence.setCatalogId(catalog.getId());
+                    occurrence.setRawDataId(rawDataStore.getId());
+                    occurrence.setSourceUri(rawDataStore.getSourceUri());
+                    occurrence.setSourceVersion(rawDataStore.getVersion());
+                    occurrence.setAssetSlotKey(candidate.assetSlotKey());
+                    occurrence.setAssetNodePath(candidate.assetNodePath());
+                    occurrence.setSectionPath(candidate.sectionPath());
+                    occurrence.setSectionUri(candidate.sectionUri());
+                    occurrence.setTenant(candidate.tenant());
+                    occurrence.setEnvironment(candidate.environment());
+                    occurrence.setProject(candidate.project());
+                    occurrence.setSite(candidate.site());
+                    occurrence.setGeo(candidate.geo());
+                    occurrence.setLocale(candidate.locale());
+                    occurrence.setRequestMetadataJson(candidate.requestMetadataJson());
+                    occurrences.add(occurrence);
+                }
+                occurrenceRepository.saveAll(occurrences);
                 // Force DB constraint checks inside this guarded block.
-                assetImageStoreRepository.flush();
+                occurrenceRepository.flush();
             }
-            logger.info("Asset metadata extraction complete for rawDataId {}. Persisted {} image records ({} pre-dedupe).",
-                    rawDataStore.getId(), deduplicated.size(), extracted.size());
+
+            logger.info("Asset metadata extraction complete for rawDataId {}. Persisted {} occurrences ({} pre-dedupe).",
+                    rawDataStore.getId(), deduplicatedBySlot.size(), extracted.size());
         } catch (Exception e) {
             logger.warn("Asset metadata extraction failed for rawDataId {}. Continuing ingestion pipeline. Reason: {}",
                     rawDataStore.getId(), e.getMessage());
         }
-    }
-
-    /**
-     * Removes duplicate rows that would collide on (source_uri, source_version, asset_hash).
-     */
-    private List<AssetImageStore> deduplicateExtractedAssets(List<AssetImageStore> extracted) {
-        if (extracted == null || extracted.isEmpty()) {
-            return List.of();
-        }
-        Map<String, AssetImageStore> deduped = new LinkedHashMap<>();
-        for (AssetImageStore item : extracted) {
-            if (item == null) continue;
-            String key = String.join("|",
-                    Optional.ofNullable(item.getSourceUri()).orElse(""),
-                    Optional.ofNullable(item.getSourceVersion()).map(String::valueOf).orElse(""),
-                    Optional.ofNullable(item.getAssetHash()).orElse("")
-            );
-            deduped.putIfAbsent(key, item);
-        }
-        return new ArrayList<>(deduped.values());
     }
 
     /**
@@ -189,9 +201,9 @@ public class AssetImageStoreService {
         }
 
         Set<String> sites = new LinkedHashSet<>(DEFAULT_SITES);
-        if (isTablePresent()) {
+        if (areTablesPresent()) {
             try {
-                sites.addAll(assetImageStoreRepository.findDistinctSites().stream()
+                sites.addAll(occurrenceRepository.findDistinctSites().stream()
                         .filter(Objects::nonNull)
                         .map(v -> v.toLowerCase(Locale.ROOT))
                         .toList());
@@ -234,12 +246,14 @@ public class AssetImageStoreService {
         }
 
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-        Page<AssetImageStore> result = assetImageStoreRepository.search(
+        Page<AssetMetadataOccurrence> result = occurrenceRepository.search(
                 tenant, environment, project, site, geo, locale, pageable
         );
 
-        List<AssetFinderTileDto> tiles = result.getContent().stream()
-                .map(this::toTileDto)
+        List<AssetMetadataOccurrence> occurrences = result.getContent();
+        Map<UUID, AssetMetadataCatalog> catalogs = loadCatalogMap(occurrences);
+        List<AssetFinderTileDto> tiles = occurrences.stream()
+                .map(occurrence -> toTileDto(occurrence, catalogs.get(occurrence.getCatalogId())))
                 .toList();
 
         AssetFinderSearchResponse response = new AssetFinderSearchResponse();
@@ -256,28 +270,30 @@ public class AssetImageStoreService {
      */
     @Transactional(readOnly = true)
     public Optional<AssetFinderAssetDetailDto> getDetails(UUID id) {
-        return assetImageStoreRepository.findById(id).map(asset -> {
-            AssetFinderAssetDetailDto detail = new AssetFinderAssetDetailDto();
-            detail.setId(asset.getId());
-            detail.setTenant(asset.getTenant());
-            detail.setEnvironment(asset.getEnvironment());
-            detail.setProject(asset.getProject());
-            detail.setSite(asset.getSite());
-            detail.setGeo(asset.getGeo());
-            detail.setLocale(asset.getLocale());
-            detail.setAssetKey(asset.getAssetKey());
-            detail.setAssetModel(asset.getAssetModel());
-            detail.setSectionPath(asset.getSectionPath());
-            detail.setSectionUri(asset.getSectionUri());
-            detail.setAssetNodePath(asset.getAssetNodePath());
-            detail.setInteractivePath(toApplePublicUrl(asset.getInteractivePath()));
-            detail.setPreviewUri(asset.getPreviewUri());
-            detail.setAltText(asset.getAltText());
-            detail.setAccessibilityText(asset.getAccessibilityText());
-            detail.setViewports(parseJsonObject(asset.getViewportsJson()));
-            detail.setMetadata(parseJsonObject(asset.getAssetMetadataJson()));
-            return detail;
-        });
+        return occurrenceRepository.findById(id).flatMap(occurrence ->
+                catalogRepository.findById(occurrence.getCatalogId()).map(catalog -> {
+                    AssetFinderAssetDetailDto detail = new AssetFinderAssetDetailDto();
+                    detail.setId(occurrence.getId());
+                    detail.setTenant(occurrence.getTenant());
+                    detail.setEnvironment(occurrence.getEnvironment());
+                    detail.setProject(occurrence.getProject());
+                    detail.setSite(occurrence.getSite());
+                    detail.setGeo(occurrence.getGeo());
+                    detail.setLocale(occurrence.getLocale());
+                    detail.setAssetKey(catalog.getAssetKey());
+                    detail.setAssetModel(catalog.getAssetModel());
+                    detail.setSectionPath(occurrence.getSectionPath());
+                    detail.setSectionUri(occurrence.getSectionUri());
+                    detail.setAssetNodePath(occurrence.getAssetNodePath());
+                    detail.setInteractivePath(toApplePublicUrl(catalog.getInteractivePath()));
+                    detail.setPreviewUri(catalog.getPreviewUri());
+                    detail.setAltText(catalog.getAltText());
+                    detail.setAccessibilityText(catalog.getAccessibilityText());
+                    detail.setViewports(parseJsonObject(catalog.getViewportsJson()));
+                    detail.setMetadata(parseJsonObject(catalog.getAssetMetadataJson()));
+                    return detail;
+                })
+        );
     }
 
     /**
@@ -299,13 +315,13 @@ public class AssetImageStoreService {
         response.setSourceUri(cleansed.getSourceUri());
         response.setSourceVersion(cleansed.getVersion());
         response.setAssetFinderEnabled(assetFinderEnabled);
-        boolean tableAvailable = isTablePresent();
+        boolean tableAvailable = areTablesPresent();
         response.setTablePresent(tableAvailable);
 
         long count = 0L;
         if (assetFinderEnabled && tableAvailable && cleansed.getRawDataId() != null) {
             try {
-                count = assetImageStoreRepository.countByRawDataId(cleansed.getRawDataId());
+                count = occurrenceRepository.countByRawDataId(cleansed.getRawDataId());
             } catch (Exception e) {
                 logger.warn("Unable to count extracted asset rows for rawDataId {}: {}",
                         cleansed.getRawDataId(), e.getMessage());
@@ -318,10 +334,10 @@ public class AssetImageStoreService {
     /**
      * Extracts all image-like nodes from a JSON payload.
      */
-    private List<AssetImageStore> extractAssets(JsonNode rootNode,
-                                                RawDataStore rawDataStore,
-                                                UploadRequestMetadata requestMetadata) {
-        List<AssetImageStore> results = new ArrayList<>();
+    private List<ExtractedAssetCandidate> extractAssets(JsonNode rootNode,
+                                                        RawDataStore rawDataStore,
+                                                        UploadRequestMetadata requestMetadata) {
+        List<ExtractedAssetCandidate> results = new ArrayList<>();
         collectAssets(rootNode, "#", new SectionContext(null, null), rawDataStore, requestMetadata, results);
         return results;
     }
@@ -334,7 +350,7 @@ public class AssetImageStoreService {
                                SectionContext currentSection,
                                RawDataStore rawDataStore,
                                UploadRequestMetadata requestMetadata,
-                               List<AssetImageStore> output) {
+                               List<ExtractedAssetCandidate> output) {
         if (node == null || node.isNull()) {
             return;
         }
@@ -349,11 +365,11 @@ public class AssetImageStoreService {
 
                 if (value.isObject()) {
                     if (isImageLikeKey(key) && isLikelyAssetNode(value)) {
-                        AssetImageStore record = buildAssetRecord(
+                        ExtractedAssetCandidate candidate = buildCandidate(
                                 key, value, childJsonPath, sectionContext, rawDataStore, requestMetadata
                         );
-                        if (record != null) {
-                            output.add(record);
+                        if (candidate != null) {
+                            output.add(candidate);
                         }
                     }
                     collectAssets(value, childJsonPath, sectionContext, rawDataStore, requestMetadata, output);
@@ -372,17 +388,18 @@ public class AssetImageStoreService {
     }
 
     /**
-     * Builds a persisted record from a discovered asset node.
+     * Builds an extracted candidate from a discovered asset node.
      */
-    private AssetImageStore buildAssetRecord(String assetKey,
-                                             JsonNode assetNode,
-                                             String jsonPath,
-                                             SectionContext sectionContext,
-                                             RawDataStore rawDataStore,
-                                             UploadRequestMetadata requestMetadata) {
+    private ExtractedAssetCandidate buildCandidate(String assetKey,
+                                                   JsonNode assetNode,
+                                                   String jsonPath,
+                                                   SectionContext sectionContext,
+                                                   RawDataStore rawDataStore,
+                                                   UploadRequestMetadata requestMetadata) {
         String assetNodePath = firstNonBlank(textValue(assetNode.get("_path")), jsonPath);
         String previewUri = resolvePreviewUri(assetNode);
         String interactivePath = firstNonBlank(previewUri, resolveUriFromNode(assetNode));
+        String publicInteractivePath = toApplePublicUrl(interactivePath);
         String altText = extractCopyField(assetNode.get("alt"));
         String accessibilityText = extractCopyField(assetNode.get("accessibilityText"));
 
@@ -391,7 +408,7 @@ public class AssetImageStoreService {
                 assetNode, new TypeReference<Map<String, Object>>() {}
         );
 
-        ResolvedMetadata resolved = resolveMetadata(requestMetadata, assetNodePath, interactivePath);
+        ResolvedMetadata resolved = resolveMetadata(requestMetadata, assetNodePath, publicInteractivePath);
         if (resolved.locale() == null) {
             resolved = new ResolvedMetadata(
                     resolved.tenant(), resolved.environment(), resolved.project(), resolved.site(),
@@ -400,31 +417,110 @@ public class AssetImageStoreService {
             );
         }
 
-        AssetImageStore record = new AssetImageStore();
-        record.setRawDataId(rawDataStore.getId());
-        record.setSourceUri(rawDataStore.getSourceUri());
-        record.setSourceVersion(rawDataStore.getVersion());
-        record.setTenant(resolved.tenant());
-        record.setEnvironment(resolved.environment());
-        record.setProject(resolved.project());
-        record.setSite(resolved.site());
-        record.setGeo(resolved.geo());
-        record.setLocale(resolved.locale());
-        record.setAssetKey(assetKey);
-        record.setAssetModel(textValue(assetNode.get("_model")));
-        record.setAssetNodePath(assetNodePath);
-        record.setSectionPath(sectionContext.path());
-        record.setSectionUri(sectionContext.uri());
-        record.setPreviewUri(previewUri);
-        record.setInteractivePath(toApplePublicUrl(interactivePath));
-        record.setAltText(altText);
-        record.setAccessibilityText(accessibilityText);
-        record.setRequestMetadataJson(serializeJson(requestMetadata != null ? requestMetadata.toMap() : Map.of()));
-        record.setViewportsJson(serializeJson(viewportMap));
-        record.setAssetMetadataJson(serializeJson(metadataMap));
-        record.setAssetHash(hashAsset(rawDataStore, assetKey, assetNodePath, interactivePath, metadataMap));
-        record.setUpdatedAt(OffsetDateTime.now());
-        return record;
+        String metadataJson = serializeJson(metadataMap);
+        String viewportsJson = serializeJson(viewportMap);
+        String metadataHash = hashString(String.join("|",
+                Optional.ofNullable(assetKey).orElse(""),
+                Optional.ofNullable(publicInteractivePath).orElse(""),
+                Optional.ofNullable(previewUri).orElse(""),
+                Optional.ofNullable(altText).orElse(""),
+                Optional.ofNullable(accessibilityText).orElse(""),
+                Optional.ofNullable(viewportsJson).orElse(""),
+                Optional.ofNullable(metadataJson).orElse("")
+        ));
+        String slotKey = hashString(String.join("|",
+                Optional.ofNullable(assetKey).orElse(""),
+                Optional.ofNullable(assetNodePath).orElse(""),
+                Optional.ofNullable(sectionContext.path()).orElse(""),
+                Optional.ofNullable(sectionContext.uri()).orElse("")
+        ));
+
+        String requestMetadataJson = serializeJson(requestMetadata != null ? requestMetadata.toMap() : Map.of());
+
+        return new ExtractedAssetCandidate(
+                rawDataStore.getSourceUri(),
+                rawDataStore.getVersion(),
+                assetKey,
+                textValue(assetNode.get("_model")),
+                assetNodePath,
+                sectionContext.path(),
+                sectionContext.uri(),
+                publicInteractivePath,
+                previewUri,
+                altText,
+                accessibilityText,
+                viewportsJson,
+                metadataJson,
+                metadataHash,
+                slotKey,
+                resolved.tenant(),
+                resolved.environment(),
+                resolved.project(),
+                resolved.site(),
+                resolved.geo(),
+                resolved.locale(),
+                requestMetadataJson
+        );
+    }
+
+    /**
+     * Deduplicates extracted candidates by slot key.
+     */
+    private List<ExtractedAssetCandidate> deduplicateBySlot(List<ExtractedAssetCandidate> extracted) {
+        if (extracted == null || extracted.isEmpty()) {
+            return List.of();
+        }
+        Map<String, ExtractedAssetCandidate> deduped = new LinkedHashMap<>();
+        for (ExtractedAssetCandidate candidate : extracted) {
+            if (candidate == null) continue;
+            deduped.putIfAbsent(candidate.assetSlotKey(), candidate);
+        }
+        return new ArrayList<>(deduped.values());
+    }
+
+    /**
+     * Upserts catalog metadata by metadata hash and returns the row.
+     */
+    private AssetMetadataCatalog upsertCatalog(ExtractedAssetCandidate candidate) {
+        Optional<AssetMetadataCatalog> existing = catalogRepository.findByMetadataHash(candidate.metadataHash());
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        AssetMetadataCatalog catalog = new AssetMetadataCatalog();
+        catalog.setMetadataHash(candidate.metadataHash());
+        catalog.setAssetKey(candidate.assetKey());
+        catalog.setAssetModel(candidate.assetModel());
+        catalog.setInteractivePath(candidate.interactivePath());
+        catalog.setPreviewUri(candidate.previewUri());
+        catalog.setAltText(candidate.altText());
+        catalog.setAccessibilityText(candidate.accessibilityText());
+        catalog.setViewportsJson(candidate.viewportsJson());
+        catalog.setAssetMetadataJson(candidate.assetMetadataJson());
+        try {
+            return catalogRepository.saveAndFlush(catalog);
+        } catch (DataIntegrityViolationException duplicate) {
+            // Another transaction inserted the same hash first; load it.
+            return catalogRepository.findByMetadataHash(candidate.metadataHash())
+                    .orElseThrow(() -> duplicate);
+        }
+    }
+
+    /**
+     * Loads a map of catalog rows keyed by id for the supplied occurrences.
+     */
+    private Map<UUID, AssetMetadataCatalog> loadCatalogMap(List<AssetMetadataOccurrence> occurrences) {
+        if (occurrences == null || occurrences.isEmpty()) {
+            return Map.of();
+        }
+        Set<UUID> ids = occurrences.stream()
+                .map(AssetMetadataOccurrence::getCatalogId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        return catalogRepository.findAllById(ids).stream()
+                .collect(Collectors.toMap(AssetMetadataCatalog::getId, c -> c));
     }
 
     /**
@@ -660,21 +756,23 @@ public class AssetImageStoreService {
     }
 
     /**
-     * Converts a model into a lightweight tile DTO.
+     * Converts an occurrence + catalog pair into a tile DTO.
      */
-    private AssetFinderTileDto toTileDto(AssetImageStore item) {
+    private AssetFinderTileDto toTileDto(AssetMetadataOccurrence occurrence, AssetMetadataCatalog catalog) {
         AssetFinderTileDto tile = new AssetFinderTileDto();
-        tile.setId(item.getId());
-        tile.setAssetKey(item.getAssetKey());
-        tile.setAssetModel(item.getAssetModel());
-        tile.setSectionPath(item.getSectionPath());
-        tile.setSectionUri(item.getSectionUri());
-        tile.setInteractivePath(toApplePublicUrl(item.getInteractivePath()));
-        tile.setPreviewUri(item.getPreviewUri());
-        tile.setLocale(item.getLocale());
-        tile.setSite(item.getSite());
-        tile.setGeo(item.getGeo());
-        tile.setAltText(item.getAltText());
+        tile.setId(occurrence.getId());
+        tile.setSectionPath(occurrence.getSectionPath());
+        tile.setSectionUri(occurrence.getSectionUri());
+        tile.setLocale(occurrence.getLocale());
+        tile.setSite(occurrence.getSite());
+        tile.setGeo(occurrence.getGeo());
+        if (catalog != null) {
+            tile.setAssetKey(catalog.getAssetKey());
+            tile.setAssetModel(catalog.getAssetModel());
+            tile.setInteractivePath(toApplePublicUrl(catalog.getInteractivePath()));
+            tile.setPreviewUri(catalog.getPreviewUri());
+            tile.setAltText(catalog.getAltText());
+        }
         return tile;
     }
 
@@ -707,24 +805,13 @@ public class AssetImageStoreService {
     }
 
     /**
-     * Produces a stable hash for deduplication keys.
+     * Returns SHA-256 hex hash for the supplied content.
      */
-    private String hashAsset(RawDataStore rawDataStore,
-                             String assetKey,
-                             String assetNodePath,
-                             String interactivePath,
-                             Map<String, Object> metadata) {
-        String base = String.join("|",
-                Optional.ofNullable(rawDataStore.getSourceUri()).orElse(""),
-                Optional.ofNullable(rawDataStore.getVersion()).map(String::valueOf).orElse(""),
-                Optional.ofNullable(assetKey).orElse(""),
-                Optional.ofNullable(assetNodePath).orElse(""),
-                Optional.ofNullable(interactivePath).orElse(""),
-                serializeJson(metadata) != null ? serializeJson(metadata) : ""
-        );
+    private String hashString(String content) {
+        String safe = content == null ? "" : content;
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] encoded = digest.digest(base.getBytes(StandardCharsets.UTF_8));
+            byte[] encoded = digest.digest(safe.getBytes(StandardCharsets.UTF_8));
             StringBuilder builder = new StringBuilder(encoded.length * 2);
             for (byte b : encoded) {
                 String hex = Integer.toHexString(0xff & b);
@@ -733,7 +820,7 @@ public class AssetImageStoreService {
             }
             return builder.toString();
         } catch (NoSuchAlgorithmException e) {
-            return Integer.toHexString(base.hashCode());
+            return Integer.toHexString(safe.hashCode());
         }
     }
 
@@ -920,25 +1007,35 @@ public class AssetImageStoreService {
     }
 
     /**
-     * Checks once whether the asset image table exists.
+     * Checks once whether both normalized tables exist.
      */
-    boolean isTablePresent() {
-        Boolean cached = tablePresent;
+    boolean areTablesPresent() {
+        Boolean cached = tablesPresent;
         if (cached != null) {
             return cached;
         }
-        boolean present = false;
+        boolean catalogPresent = false;
+        boolean occurrencePresent = false;
         try {
             String reg = jdbcTemplate.queryForObject(
-                    "select to_regclass('public.asset_image_store')",
+                    "select to_regclass('public.asset_metadata_catalog')",
                     String.class
             );
-            present = reg != null;
+            catalogPresent = reg != null;
         } catch (Exception ignored) {
-            present = false;
+            catalogPresent = false;
         }
-        tablePresent = present;
-        return present;
+        try {
+            String reg = jdbcTemplate.queryForObject(
+                    "select to_regclass('public.asset_metadata_occurrence')",
+                    String.class
+            );
+            occurrencePresent = reg != null;
+        } catch (Exception ignored) {
+            occurrencePresent = false;
+        }
+        tablesPresent = catalogPresent && occurrencePresent;
+        return tablesPresent;
     }
 
     private record SectionContext(String path, String uri) {}
@@ -949,4 +1046,29 @@ public class AssetImageStoreService {
                                     String site,
                                     String geo,
                                     String locale) {}
+
+    private record ExtractedAssetCandidate(
+            String sourceUri,
+            Integer sourceVersion,
+            String assetKey,
+            String assetModel,
+            String assetNodePath,
+            String sectionPath,
+            String sectionUri,
+            String interactivePath,
+            String previewUri,
+            String altText,
+            String accessibilityText,
+            String viewportsJson,
+            String assetMetadataJson,
+            String metadataHash,
+            String assetSlotKey,
+            String tenant,
+            String environment,
+            String project,
+            String site,
+            String geo,
+            String locale,
+            String requestMetadataJson
+    ) {}
 }

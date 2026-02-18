@@ -40,20 +40,6 @@ BEGIN
     END IF;
 END $$;
 
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint c
-        WHERE c.conname = 'uk_asset_region_locale_ref_source_locale'
-          AND c.conrelid = 'asset_region_locale_ref'::regclass
-    ) THEN
-        ALTER TABLE asset_region_locale_ref
-            ADD CONSTRAINT uk_asset_region_locale_ref_source_locale
-            UNIQUE (source_type, locale_code);
-    END IF;
-END $$;
-
 CREATE INDEX IF NOT EXISTS idx_asset_region_locale_ref_geo
     ON asset_region_locale_ref (geo_code);
 

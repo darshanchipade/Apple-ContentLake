@@ -23,7 +23,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -312,12 +311,10 @@ public class AssetRegionLocaleService {
             existingByKey.put(rowKey(row.getApplePath(), row.getDisplayName()), row);
         }
 
-        Set<String> seen = new HashSet<>();
         List<AssetRegionLocaleRef> changedRows = new ArrayList<>();
 
         for (ParsedRegionEntry entry : parsedEntries) {
             String key = rowKey(entry.applePath(), entry.displayName());
-            seen.add(key);
             AssetRegionLocaleRef row = existingByKey.get(key);
             boolean isNew = row == null;
             if (isNew) {
@@ -332,14 +329,6 @@ public class AssetRegionLocaleService {
             changed |= assignIfChanged(row::getActive, row::setActive, true);
 
             if (isNew || changed) {
-                changedRows.add(row);
-            }
-        }
-
-        for (AssetRegionLocaleRef row : existingRows) {
-            String key = rowKey(row.getApplePath(), row.getDisplayName());
-            if (!seen.contains(key) && Boolean.TRUE.equals(row.getActive())) {
-                row.setActive(false);
                 changedRows.add(row);
             }
         }

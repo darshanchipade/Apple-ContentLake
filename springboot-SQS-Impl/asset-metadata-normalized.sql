@@ -101,4 +101,38 @@ CREATE INDEX IF NOT EXISTS idx_asset_metadata_occurrence_section
 CREATE INDEX IF NOT EXISTS idx_asset_metadata_occurrence_created_at
     ON asset_metadata_occurrence (created_at);
 
+-- Repair legacy schema drift where filter columns were created as BYTEA.
+DO $$
+DECLARE
+    col_name TEXT;
+BEGIN
+    FOREACH col_name IN ARRAY ARRAY['tenant', 'environment', 'project', 'site', 'geo', 'locale']
+    LOOP
+        IF EXISTS (
+            SELECT 1
+            FROM information_schema.columns c
+            WHERE c.table_schema = 'public'
+              AND c.table_name = 'asset_metadata_occurrence'
+              AND c.column_name = col_name
+              AND c.udt_name = 'bytea'
+        ) THEN
+            BEGIN
+                EXECUTE format(
+                    'ALTER TABLE asset_metadata_occurrence
+                     ALTER COLUMN %1$I TYPE TEXT
+                     USING CASE WHEN %1$I IS NULL THEN NULL ELSE convert_from(%1$I, ''UTF8'') END',
+                    col_name
+                );
+            EXCEPTION WHEN OTHERS THEN
+                EXECUTE format(
+                    'ALTER TABLE asset_metadata_occurrence
+                     ALTER COLUMN %1$I TYPE TEXT
+                     USING CASE WHEN %1$I IS NULL THEN NULL ELSE encode(%1$I, ''escape'') END',
+                    col_name
+                );
+            END;
+        END IF;
+    END LOOP;
+END $$;
+
 COMMIT;

@@ -217,6 +217,14 @@ export default function IngestionPage() {
   const [apiFeedback, setApiFeedback] = useState<ApiFeedback>({ state: "idle" });
   const [s3Feedback, setS3Feedback] = useState<ApiFeedback>({ state: "idle" });
   const [extracting, setExtracting] = useState(false);
+  const [requestMetadata, setRequestMetadata] = useState({
+    tenant: "Apple COM CMS",
+    environment: "Stage",
+    project: "Rome",
+    site: "ipad",
+    geo: "WW",
+    locale: "en_US"
+  });
 
   const filteredTree = useMemo(
     () => filterTree(treeNodes, searchQuery),
@@ -427,7 +435,8 @@ export default function IngestionPage() {
       const formData = new FormData();
       formData.append("file", localFile);
 
-      const response = await fetch("/api/ingestion/upload", {
+      const queryParams = new URLSearchParams(requestMetadata).toString();
+      const response = await fetch(`/api/ingestion/upload?${queryParams}`, {
         method: "POST",
         body: formData,
       });
@@ -576,7 +585,8 @@ export default function IngestionPage() {
     }
 
     try {
-      const response = await fetch("/api/ingestion/payload", {
+      const queryParams = new URLSearchParams(requestMetadata).toString();
+      const response = await fetch(`/api/ingestion/payload?${queryParams}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ payload: parsed }),
@@ -711,7 +721,8 @@ export default function IngestionPage() {
       ...previous,
     ]);
 
-    const response = await fetch("/api/ingestion/s3", {
+    const queryParams = new URLSearchParams(requestMetadata).toString();
+    const response = await fetch(`/api/ingestion/s3?${queryParams}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sourceUri: normalized }),
@@ -1173,6 +1184,70 @@ export default function IngestionPage() {
                   <FeedbackPill feedback={s3Feedback} />
                 </div>
               )}
+
+              {/* Upload Request Metadata Section */}
+              <div className="mt-8 pt-8 border-t border-slate-100">
+                <div className="flex items-center gap-2 mb-4">
+                  <AdjustmentsHorizontalIcon className="size-5 text-slate-900" />
+                  <h3 className="text-lg font-semibold text-slate-900">Upload Request Metadata</h3>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-slate-500 uppercase">Tenant</label>
+                    <input
+                      type="text"
+                      className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+                      value={requestMetadata.tenant}
+                      onChange={(e) => setRequestMetadata({ ...requestMetadata, tenant: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-slate-500 uppercase">Environment</label>
+                    <input
+                      type="text"
+                      className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+                      value={requestMetadata.environment}
+                      onChange={(e) => setRequestMetadata({ ...requestMetadata, environment: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-slate-500 uppercase">Project</label>
+                    <input
+                      type="text"
+                      className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+                      value={requestMetadata.project}
+                      onChange={(e) => setRequestMetadata({ ...requestMetadata, project: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-slate-500 uppercase">Site</label>
+                    <input
+                      type="text"
+                      className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+                      value={requestMetadata.site}
+                      onChange={(e) => setRequestMetadata({ ...requestMetadata, site: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-slate-500 uppercase">Geo</label>
+                    <input
+                      type="text"
+                      className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+                      value={requestMetadata.geo}
+                      onChange={(e) => setRequestMetadata({ ...requestMetadata, geo: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-slate-500 uppercase">Locale</label>
+                    <input
+                      type="text"
+                      className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+                      value={requestMetadata.locale}
+                      onChange={(e) => setRequestMetadata({ ...requestMetadata, locale: e.target.value })}
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm flex-1 flex flex-col min-h-[400px]">

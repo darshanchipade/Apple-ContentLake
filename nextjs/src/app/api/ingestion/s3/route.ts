@@ -55,10 +55,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const searchParams = new URLSearchParams(request.nextUrl.search);
+  searchParams.set("sourceUri", sourceUri);
+
   const url = new URL(
-    `/api/extract-cleanse-enrich-and-store?${new URLSearchParams({
-      sourceUri,
-    }).toString()}`,
+    `/api/extract-cleanse-enrich-and-store?${searchParams.toString()}`,
     backendBaseUrl,
   );
 

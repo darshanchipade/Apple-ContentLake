@@ -42,27 +42,23 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
      */
     @Query(
             value = """
-                    select o.*
-                    from asset_metadata_occurrence o
-                    where (:tenant is null or lower(convert_from(cast(o.tenant as bytea), 'UTF8')) = lower(cast(:tenant as text)))
-                      and (:environment is null or lower(convert_from(cast(o.environment as bytea), 'UTF8')) = lower(cast(:environment as text)))
-                      and (:project is null or lower(convert_from(cast(o.project as bytea), 'UTF8')) = lower(cast(:project as text)))
-                      and (:site is null or lower(convert_from(cast(o.site as bytea), 'UTF8')) = lower(cast(:site as text)))
-                      and (:geo is null or lower(convert_from(cast(o.geo as bytea), 'UTF8')) = lower(cast(:geo as text)))
-                      and (:locale is null or lower(convert_from(cast(o.locale as bytea), 'UTF8')) = lower(cast(:locale as text)))
-                    order by o.created_at desc
+                    select o from AssetMetadataOccurrence o
+                    where (:tenant is null or lower(o.tenant) = lower(:tenant))
+                      and (:environment is null or lower(o.environment) = lower(:environment))
+                      and (:project is null or lower(o.project) = lower(:project))
+                      and (:site is null or lower(o.site) = lower(:site))
+                      and (:geo is null or lower(o.geo) = lower(:geo))
+                      and (:locale is null or lower(o.locale) = lower(:locale))
                     """,
             countQuery = """
-                    select count(*)
-                    from asset_metadata_occurrence o
-                    where (:tenant is null or lower(convert_from(cast(o.tenant as bytea), 'UTF8')) = lower(cast(:tenant as text)))
-                      and (:environment is null or lower(convert_from(cast(o.environment as bytea), 'UTF8')) = lower(cast(:environment as text)))
-                      and (:project is null or lower(convert_from(cast(o.project as bytea), 'UTF8')) = lower(cast(:project as text)))
-                      and (:site is null or lower(convert_from(cast(o.site as bytea), 'UTF8')) = lower(cast(:site as text)))
-                      and (:geo is null or lower(convert_from(cast(o.geo as bytea), 'UTF8')) = lower(cast(:geo as text)))
-                      and (:locale is null or lower(convert_from(cast(o.locale as bytea), 'UTF8')) = lower(cast(:locale as text)))
-                    """,
-            nativeQuery = true
+                    select count(o) from AssetMetadataOccurrence o
+                    where (:tenant is null or lower(o.tenant) = lower(:tenant))
+                      and (:environment is null or lower(o.environment) = lower(:environment))
+                      and (:project is null or lower(o.project) = lower(:project))
+                      and (:site is null or lower(o.site) = lower(:site))
+                      and (:geo is null or lower(o.geo) = lower(:geo))
+                      and (:locale is null or lower(o.locale) = lower(:locale))
+                    """
     )
     Page<AssetMetadataOccurrence> search(
             @Param("tenant") String tenant,
@@ -77,34 +73,18 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
     /**
      * Loads distinct site values for UI options.
      */
-    @Query(
-            value = """
-                    select distinct convert_from(cast(o.site as bytea), 'UTF8') as site
-                    from asset_metadata_occurrence o
-                    where o.site is not null
-                      and convert_from(cast(o.site as bytea), 'UTF8') <> ''
-                    order by site
-                    """,
-            nativeQuery = true
-    )
+    @Query("select distinct o.site from AssetMetadataOccurrence o where o.site is not null and o.site <> '' order by o.site")
     List<String> findDistinctSites();
 
     /**
      * Loads distinct geo/locale pairs from current extracted asset rows.
      */
-    @Query(
-            value = """
-                    select distinct
-                        convert_from(cast(o.geo as bytea), 'UTF8') as geo,
-                        convert_from(cast(o.locale as bytea), 'UTF8') as locale
-                    from asset_metadata_occurrence o
-                    where o.geo is not null
-                      and convert_from(cast(o.geo as bytea), 'UTF8') <> ''
-                      and o.locale is not null
-                      and convert_from(cast(o.locale as bytea), 'UTF8') <> ''
-                    order by geo, locale
-                    """,
-            nativeQuery = true
-    )
+    @Query("""
+            select distinct o.geo as geo, o.locale as locale
+            from AssetMetadataOccurrence o
+            where o.geo is not null and o.geo <> ''
+              and o.locale is not null and o.locale <> ''
+            order by o.geo, o.locale
+            """)
     List<GeoLocaleProjection> findDistinctGeoLocalePairs();
 }

@@ -30,7 +30,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -92,9 +91,6 @@ public class AssetImageStoreService {
             "GN", "GQ", "ML", "NE", "AM", "AZ", "BY", "GE", "KZ", "KG", "MD", "ME",
             "MK", "RU", "TJ", "TM", "UA", "UZ", "TR"
     );
-    private static final List<String> OCCURRENCE_FILTER_TEXT_COLUMNS = List.of(
-            "tenant", "environment", "project", "site", "geo", "locale"
-    );
 
     private final AssetMetadataCatalogRepository catalogRepository;
     private final AssetMetadataOccurrenceRepository occurrenceRepository;
@@ -126,7 +122,6 @@ public class AssetImageStoreService {
 
     // Cached after first check. If schema changes while running, restart app.
     private volatile Boolean tablesPresent;
-    private volatile Boolean occurrenceFilterColumnsNormalized;
 
     /**
      * Creates a service for image extraction and Asset Finder access.
@@ -306,7 +301,7 @@ public class AssetImageStoreService {
     /**
      * Searches stored image metadata using Asset Finder filters.
      */
-    @Transactional
+    @Transactional(readOnly = true)
     public AssetFinderSearchResponse search(AssetFinderFilterRequest request) {
         AssetFinderFilterRequest safeRequest = request != null ? request : new AssetFinderFilterRequest();
         int page = Math.max(0, Optional.ofNullable(safeRequest.getPage()).orElse(0));
@@ -1375,103 +1370,9 @@ public class AssetImageStoreService {
         }
         boolean present = catalogPresent && occurrencePresent;
         if (present) {
-            boolean canNormalizeNow = !TransactionSynchronizationManager.isCurrentTransactionReadOnly();
-            if (canNormalizeNow) {
-                if (ensureOccurrenceFilterColumnsAreText()) {
-                    tablesPresent = true;
-                }
-            } else if (Boolean.TRUE.equals(occurrenceFilterColumnsNormalized)) {
-                tablesPresent = true;
-            }
+            tablesPresent = true;
         }
-        return Boolean.TRUE.equals(tablesPresent);
-    }
-
-    /**
-     * Ensures legacy BYTEA filter columns are converted to TEXT so lower(...) predicates work.
-     */
-    private boolean ensureOccurrenceFilterColumnsAreText() {
-        if (Boolean.TRUE.equals(occurrenceFilterColumnsNormalized)) {
-            return true;
-        }
-        synchronized (this) {
-            if (Boolean.TRUE.equals(occurrenceFilterColumnsNormalized)) {
-                return true;
-            }
-            try {
-                for (String column : OCCURRENCE_FILTER_TEXT_COLUMNS) {
-                    String udtName = jdbcTemplate.queryForObject(
-                            """
-                            select udt_name
-                            from information_schema.columns
-                            where table_schema = 'public'
-                              and table_name = 'asset_metadata_occurrence'
-                              and column_name = ?
-                            """,
-                            String.class,
-                            column
-                    );
-                    if (udtName == null || isTextualSqlType(udtName)) {
-                        continue;
-                    }
-                    if ("bytea".equalsIgnoreCase(udtName)) {
-                        if (!convertOccurrenceColumnFromByteaToText(column)) {
-                            logger.error("Failed converting asset_metadata_occurrence.{} from BYTEA to TEXT.", column);
-                            return false;
-                        }
-                        continue;
-                    }
-                    logger.error("Unsupported SQL type '{}' for asset_metadata_occurrence.{}; expected TEXT-compatible type.",
-                            udtName, column);
-                    return false;
-                }
-                occurrenceFilterColumnsNormalized = true;
-                return true;
-            } catch (Exception e) {
-                logger.error("Unable to normalize asset_metadata_occurrence filter column types. Reason: {}", e.getMessage());
-                return false;
-            }
-        }
-    }
-
-    /**
-     * Converts a single BYTEA column to TEXT, preferring UTF-8 decode and falling back to escaped bytes.
-     */
-    private boolean convertOccurrenceColumnFromByteaToText(String column) {
-        String utf8Sql = """
-                ALTER TABLE asset_metadata_occurrence
-                ALTER COLUMN %s TYPE TEXT
-                USING CASE WHEN %s IS NULL THEN NULL ELSE convert_from(%s, 'UTF8') END
-                """.formatted(column, column, column);
-        try {
-            jdbcTemplate.execute(utf8Sql);
-            logger.info("Converted asset_metadata_occurrence.{} from BYTEA to TEXT using UTF-8 decode.", column);
-            return true;
-        } catch (Exception utf8Error) {
-            logger.warn("UTF-8 conversion failed for asset_metadata_occurrence.{}; retrying with escaped decode. Reason: {}",
-                    column, utf8Error.getMessage());
-        }
-
-        String escapedSql = """
-                ALTER TABLE asset_metadata_occurrence
-                ALTER COLUMN %s TYPE TEXT
-                USING CASE WHEN %s IS NULL THEN NULL ELSE encode(%s, 'escape') END
-                """.formatted(column, column, column);
-        try {
-            jdbcTemplate.execute(escapedSql);
-            logger.info("Converted asset_metadata_occurrence.{} from BYTEA to TEXT using escaped decode.", column);
-            return true;
-        } catch (Exception escapedError) {
-            logger.error("Escaped conversion also failed for asset_metadata_occurrence.{}: {}",
-                    column, escapedError.getMessage());
-            return false;
-        }
-    }
-
-    private boolean isTextualSqlType(String udtName) {
-        return "text".equalsIgnoreCase(udtName)
-                || "varchar".equalsIgnoreCase(udtName)
-                || "bpchar".equalsIgnoreCase(udtName);
+        return present;
     }
 
     private record SectionContext(String path, String uri) {}

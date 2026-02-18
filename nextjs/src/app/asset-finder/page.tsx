@@ -144,6 +144,15 @@ const FILTER_PANEL_SHADOW = "0 1px 3px rgba(15, 23, 42, 0.08)";
 const BUTTON_SHADOW = "0 1px 2px rgba(15, 23, 42, 0.18)";
 const TILE_SHADOW = "0 2px 7px rgba(15, 23, 42, 0.16)";
 
+const FILTER_HELP_TEXT = {
+  tenant: "Content source tenant (for example: applecom-cms).",
+  environment: "Deployment environment for this content (stage, prod, qa).",
+  project: "Project or campaign grouping for uploaded content.",
+  site: "Site or page family (for example: ipad, mac).",
+  geo: "Business geo/region grouping used for filtering.",
+  locale: "Locale code for language + country (for example: en_CA).",
+} as const;
+
 const safeParsePayload = (raw: string): unknown => {
   try {
     return JSON.parse(raw);
@@ -177,6 +186,18 @@ function TilePreview({ path, label }: { path?: string; label: string }) {
       loading="lazy"
       onError={() => setLoadFailed(true)}
     />
+  );
+}
+
+function DropdownHelp({ text }: { text: string }) {
+  return (
+    <span
+      title={text}
+      aria-label={text}
+      className="inline-flex size-3.5 cursor-help items-center justify-center rounded-full border border-slate-300 bg-white text-[9px] font-bold leading-none text-slate-500"
+    >
+      i
+    </span>
   );
 }
 
@@ -342,7 +363,7 @@ export default function AssetFinderPage() {
           <div className="grid gap-2.5 md:grid-cols-3 xl:grid-cols-[repeat(6,minmax(0,1fr))_auto_auto_auto]">
             <label className="block">
               <span className={filterLabelClass} style={{ color: UI_COLORS.label }}>
-                Tenant <InformationCircleIcon className="size-3" style={{ color: "#858585" }} />
+                Tenant <DropdownHelp text={FILTER_HELP_TEXT.tenant} />
               </span>
               <select
                 value={filters.tenant}
@@ -359,7 +380,7 @@ export default function AssetFinderPage() {
             </label>
             <label className="block">
               <span className={filterLabelClass} style={{ color: UI_COLORS.label }}>
-                Environment <InformationCircleIcon className="size-3" style={{ color: "#858585" }} />
+                Environment <DropdownHelp text={FILTER_HELP_TEXT.environment} />
               </span>
               <select
                 value={filters.environment}
@@ -376,7 +397,7 @@ export default function AssetFinderPage() {
             </label>
             <label className="block">
               <span className={filterLabelClass} style={{ color: UI_COLORS.label }}>
-                Project <InformationCircleIcon className="size-3" style={{ color: "#858585" }} />
+                Project <DropdownHelp text={FILTER_HELP_TEXT.project} />
               </span>
               <select
                 value={filters.project}
@@ -393,7 +414,7 @@ export default function AssetFinderPage() {
             </label>
             <label className="block">
               <span className={filterLabelClass} style={{ color: UI_COLORS.label }}>
-                Site / Page <InformationCircleIcon className="size-3" style={{ color: "#858585" }} />
+                Site / Page <DropdownHelp text={FILTER_HELP_TEXT.site} />
               </span>
               <select
                 value={filters.site}
@@ -410,7 +431,7 @@ export default function AssetFinderPage() {
             </label>
             <label className="block">
               <span className={filterLabelClass} style={{ color: UI_COLORS.label }}>
-                Geo / Region <InformationCircleIcon className="size-3" style={{ color: "#858585" }} />
+                Geo / Region <DropdownHelp text={FILTER_HELP_TEXT.geo} />
               </span>
               <select
                 value={filters.geo}
@@ -431,7 +452,7 @@ export default function AssetFinderPage() {
             </label>
             <label className="block">
               <span className={filterLabelClass} style={{ color: UI_COLORS.label }}>
-                Locale <InformationCircleIcon className="size-3" style={{ color: "#858585" }} />
+                Locale <DropdownHelp text={FILTER_HELP_TEXT.locale} />
               </span>
               <select
                 value={filters.locale}

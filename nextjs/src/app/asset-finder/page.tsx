@@ -4,8 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
 import {
   ArrowPathIcon,
+  CheckIcon,
   InformationCircleIcon,
-  MagnifyingGlassIcon,
+  LinkIcon,
   PhotoIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
@@ -116,6 +117,15 @@ const normalizeAssetPath = (path: string | undefined) => {
   return `http://www.apple.com/${path}`;
 };
 
+const normalizeLocaleValue = (locale: string | undefined) => {
+  if (!locale) return undefined;
+  const normalized = locale.trim().replace("-", "_");
+  if (normalized.length === 5 && normalized[2] === "_") {
+    return `${normalized.slice(0, 2).toLowerCase()}_${normalized.slice(3).toUpperCase()}`;
+  }
+  return normalized;
+};
+
 const safeParsePayload = (raw: string): unknown => {
   try {
     return JSON.parse(raw);
@@ -135,8 +145,8 @@ function TilePreview({ path, label }: { path?: string; label: string }) {
   const normalized = normalizeAssetPath(path);
   if (!normalized || loadFailed) {
     return (
-      <div className="flex h-44 items-center justify-center bg-slate-100 text-slate-500">
-        <PhotoIcon className="size-16" />
+      <div className="flex h-44 items-center justify-center bg-[#ededed] text-slate-700">
+        <PhotoIcon className="size-20" />
       </div>
     );
   }
@@ -144,7 +154,7 @@ function TilePreview({ path, label }: { path?: string; label: string }) {
     <img
       src={normalized}
       alt={label}
-      className="h-44 w-full object-contain bg-slate-100"
+      className="h-44 w-full object-contain bg-[#ededed] p-5"
       loading="lazy"
       onError={() => setLoadFailed(true)}
     />
@@ -161,10 +171,20 @@ export default function AssetFinderPage() {
   const [detail, setDetail] = useState<AssetFinderDetail | null>(null);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [showLocaleSpecificAssets, setShowLocaleSpecificAssets] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
 
   const localesForGeo = useMemo(() => {
     return options.geoToLocales?.[filters.geo] ?? [];
   }, [options, filters.geo]);
+
+  const visibleItems = useMemo(() => {
+    const items = results?.items ?? [];
+    if (!showLocaleSpecificAssets) return items;
+    const selectedLocale = normalizeLocaleValue(filters.locale);
+    if (!selectedLocale) return items;
+    return items.filter((item) => normalizeLocaleValue(item.locale) === selectedLocale);
+  }, [results, showLocaleSpecificAssets, filters.locale]);
 
   useEffect(() => {
     let active = true;
@@ -259,30 +279,39 @@ export default function AssetFinderPage() {
     }
   };
 
+  const shareUrl = async () => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value?.trim()) {
+        url.searchParams.set(key, value);
+      } else {
+        url.searchParams.delete(key);
+      }
+    });
+    url.searchParams.set("localeSpecific", showLocaleSpecificAssets ? "true" : "false");
+    try {
+      await navigator.clipboard.writeText(url.toString());
+      setShareCopied(true);
+      window.setTimeout(() => setShareCopied(false), 1800);
+    } catch {
+      setShareCopied(false);
+    }
+  };
+
   return (
     <PipelineShell currentStep="ingestion" showTracker={false}>
-      <main className="mx-auto max-w-[1700px] p-4 lg:p-8">
-        <div className="mb-6 flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-2xl lg:text-3xl font-bold text-slate-900">Asset Finder</h1>
-            <p className="text-sm text-slate-500">
-              Find icons and image assets from uploaded JSON metadata.
-            </p>
-          </div>
-          <div className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-            <MagnifyingGlassIcon className="size-4" />
-            Content Lake
-          </div>
-        </div>
-
-        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:p-5">
-          <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-            <label className="text-xs font-semibold text-slate-600">
-              Tenant
+      <main className="mx-auto max-w-[1750px] p-3 lg:p-5">
+        <section className="rounded-md border border-slate-300 bg-[#f3f3f3] p-3">
+          <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-[repeat(6,minmax(0,1fr))_auto_auto_auto]">
+            <label className="block">
+              <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700">
+                Tenant <InformationCircleIcon className="size-3 text-slate-400" />
+              </span>
               <select
                 value={filters.tenant}
                 onChange={(event) => setFilters((prev) => ({ ...prev, tenant: event.target.value }))}
-                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm text-slate-900"
+                className="h-9 w-full rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none"
               >
                 {options.tenants.map((value) => (
                   <option key={value} value={value}>
@@ -291,12 +320,14 @@ export default function AssetFinderPage() {
                 ))}
               </select>
             </label>
-            <label className="text-xs font-semibold text-slate-600">
-              Environment
+            <label className="block">
+              <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700">
+                Environment <InformationCircleIcon className="size-3 text-slate-400" />
+              </span>
               <select
                 value={filters.environment}
                 onChange={(event) => setFilters((prev) => ({ ...prev, environment: event.target.value }))}
-                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm text-slate-900"
+                className="h-9 w-full rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none"
               >
                 {options.environments.map((value) => (
                   <option key={value} value={value}>
@@ -305,12 +336,14 @@ export default function AssetFinderPage() {
                 ))}
               </select>
             </label>
-            <label className="text-xs font-semibold text-slate-600">
-              Project
+            <label className="block">
+              <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700">
+                Project <InformationCircleIcon className="size-3 text-slate-400" />
+              </span>
               <select
                 value={filters.project}
                 onChange={(event) => setFilters((prev) => ({ ...prev, project: event.target.value }))}
-                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm text-slate-900"
+                className="h-9 w-full rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none"
               >
                 {options.projects.map((value) => (
                   <option key={value} value={value}>
@@ -319,12 +352,14 @@ export default function AssetFinderPage() {
                 ))}
               </select>
             </label>
-            <label className="text-xs font-semibold text-slate-600">
-              Site / Page
+            <label className="block">
+              <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700">
+                Site / Page <InformationCircleIcon className="size-3 text-slate-400" />
+              </span>
               <select
                 value={filters.site}
                 onChange={(event) => setFilters((prev) => ({ ...prev, site: event.target.value }))}
-                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm text-slate-900"
+                className="h-9 w-full rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none"
               >
                 {options.sites.map((value) => (
                   <option key={value} value={value}>
@@ -333,8 +368,10 @@ export default function AssetFinderPage() {
                 ))}
               </select>
             </label>
-            <label className="text-xs font-semibold text-slate-600">
-              Geo / Region
+            <label className="block">
+              <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700">
+                Geo / Region <InformationCircleIcon className="size-3 text-slate-400" />
+              </span>
               <select
                 value={filters.geo}
                 onChange={(event) => {
@@ -342,7 +379,7 @@ export default function AssetFinderPage() {
                   const nextLocale = options.geoToLocales[nextGeo]?.[0] ?? "";
                   setFilters((prev) => ({ ...prev, geo: nextGeo, locale: nextLocale || prev.locale }));
                 }}
-                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm text-slate-900"
+                className="h-9 w-full rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none"
               >
                 {options.geos.map((value) => (
                   <option key={value} value={value}>
@@ -351,12 +388,14 @@ export default function AssetFinderPage() {
                 ))}
               </select>
             </label>
-            <label className="text-xs font-semibold text-slate-600">
-              Locale
+            <label className="block">
+              <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700">
+                Locale <InformationCircleIcon className="size-3 text-slate-400" />
+              </span>
               <select
                 value={filters.locale}
                 onChange={(event) => setFilters((prev) => ({ ...prev, locale: event.target.value }))}
-                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm text-slate-900"
+                className="h-9 w-full rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none"
               >
                 {(localesForGeo.length ? localesForGeo : [filters.locale]).map((value) => (
                   <option key={value} value={value}>
@@ -365,15 +404,13 @@ export default function AssetFinderPage() {
                 ))}
               </select>
             </label>
-          </div>
 
-          <div className="mt-4 flex flex-wrap items-center gap-3">
             <button
               type="button"
               onClick={runFilter}
               disabled={isFiltering || loadingOptions}
               className={clsx(
-                "rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700",
+                "h-9 self-end rounded bg-[#2f75d6] px-5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#2867be]",
                 (isFiltering || loadingOptions) && "cursor-wait opacity-70",
               )}
             >
@@ -382,65 +419,110 @@ export default function AssetFinderPage() {
             <button
               type="button"
               onClick={resetFilters}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
+              className="h-9 self-end rounded bg-[#2f75d6] px-5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#2867be]"
             >
               Reset
             </button>
-            {loadingOptions && (
-              <span className="inline-flex items-center gap-2 text-xs text-slate-500">
-                <ArrowPathIcon className="size-4 animate-spin" />
-                Loading options...
-              </span>
-            )}
+            <button
+              type="button"
+              onClick={shareUrl}
+              className={clsx(
+                "inline-flex h-9 self-end items-center justify-center gap-1 rounded px-4 text-xs font-semibold shadow-sm transition",
+                shareCopied
+                  ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                  : "bg-[#2f75d6] text-white hover:bg-[#2867be]",
+              )}
+            >
+              {shareCopied ? (
+                <>
+                  <CheckIcon className="size-4" />
+                  Copied
+                </>
+              ) : (
+                <>
+                  <LinkIcon className="size-4" />
+                  Share URL
+                </>
+              )}
+            </button>
           </div>
+
+          {loadingOptions && (
+            <div className="mt-2 inline-flex items-center gap-2 text-xs text-slate-500">
+              <ArrowPathIcon className="size-3.5 animate-spin" />
+              Loading options...
+            </div>
+          )}
         </section>
 
-        <section className="mt-6">
-          <div className="mb-3 text-sm font-semibold text-slate-700">
-            Count: {results?.count ?? 0}
+        <section className="mt-3">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <p className="text-xs font-medium text-slate-700">
+              Count : {visibleItems.length}/{results?.count ?? visibleItems.length}
+            </p>
+            <label className="inline-flex items-center gap-2 text-xs text-slate-700">
+              <input
+                type="checkbox"
+                checked={showLocaleSpecificAssets}
+                onChange={(event) => setShowLocaleSpecificAssets(event.target.checked)}
+                className="h-3.5 w-3.5 rounded border-slate-300 text-[#2f75d6] focus:ring-[#2f75d6]"
+              />
+              Show Locale Specific Assets
+            </label>
           </div>
+
           {error && (
-            <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+            <div className="mb-4 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
               {error}
             </div>
           )}
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {(results?.items ?? []).map((tile) => (
-              <article key={tile.id} className="rounded-xl border border-slate-200 bg-white shadow-sm">
+
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {visibleItems.map((tile) => (
+              <article
+                key={tile.id}
+                className="rounded-sm border border-slate-300 bg-[#f0f0f0] shadow-[0_2px_6px_rgba(0,0,0,0.18)]"
+              >
                 <TilePreview
                   path={tile.previewUri ?? tile.interactivePath}
                   label={tile.altText ?? tile.assetKey ?? "Asset preview"}
                 />
-                <div className="p-3">
-                  <div className="mb-2 flex items-center justify-end">
+                <div className="border-t border-slate-300 px-3 py-2">
+                  <div className="flex items-end justify-between gap-2">
+                    <p className="text-[10px] leading-4 text-slate-600 break-all">
+                      Interactive Path:{" "}
+                      {normalizeAssetPath(tile.interactivePath) ? (
+                        <a
+                          href={normalizeAssetPath(tile.interactivePath)}
+                          className="text-[#1f4fa8] underline"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {normalizeAssetPath(tile.interactivePath)}
+                        </a>
+                      ) : (
+                        "—"
+                      )}
+                    </p>
                     <button
                       type="button"
                       onClick={() => openDetail(tile.id)}
-                      className="rounded-full p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+                      className="shrink-0 rounded-full p-0.5 text-slate-500 transition hover:bg-slate-300/50 hover:text-slate-900"
                       title="View metadata"
                     >
-                      <InformationCircleIcon className="size-5" />
+                      <InformationCircleIcon className="size-4" />
                     </button>
                   </div>
-                  <p className="text-xs text-slate-500 break-all">
-                    Interactive Path:{" "}
-                    {normalizeAssetPath(tile.interactivePath) ? (
-                      <a
-                        href={normalizeAssetPath(tile.interactivePath)}
-                        className="text-blue-700 underline"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {normalizeAssetPath(tile.interactivePath)}
-                      </a>
-                    ) : (
-                      "—"
-                    )}
-                  </p>
                 </div>
               </article>
             ))}
           </div>
+
+          {!isFiltering && visibleItems.length === 0 && (
+            <div className="mt-6 rounded border border-dashed border-slate-300 bg-white/70 px-4 py-8 text-center text-sm text-slate-500">
+              No assets available for the selected filters.
+            </div>
+          )}
         </section>
       </main>
 

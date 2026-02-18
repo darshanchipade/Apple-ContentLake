@@ -35,6 +35,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -223,11 +224,68 @@ public class AssetImageStoreService {
         response.setEnvironments(ENVIRONMENTS);
         response.setProjects(new ArrayList<>(projects));
         response.setSites(new ArrayList<>(sites));
-        AssetRegionLocaleService.RegionOptionsSnapshot regionOptions =
-                assetRegionLocaleService.getRegionOptionsSnapshot();
+        AssetRegionLocaleService.RegionOptionsSnapshot regionOptions = resolveRegionOptionsFromOccurrences();
         response.setGeos(regionOptions.geos());
         response.setGeoToLocales(regionOptions.geoToLocales());
         return response;
+    }
+
+    /**
+     * Builds geo/locale option maps from actual occurrence data first, then fallback reference table.
+     */
+    private AssetRegionLocaleService.RegionOptionsSnapshot resolveRegionOptionsFromOccurrences() {
+        if (!areTablesPresent()) {
+            return assetRegionLocaleService.getRegionOptionsSnapshot();
+        }
+
+        try {
+            List<AssetMetadataOccurrenceRepository.GeoLocaleProjection> pairs =
+                    occurrenceRepository.findDistinctGeoLocalePairs();
+            if (pairs == null || pairs.isEmpty()) {
+                return assetRegionLocaleService.getRegionOptionsSnapshot();
+            }
+
+            Map<String, LinkedHashSet<String>> grouped = new LinkedHashMap<>();
+            for (AssetMetadataOccurrenceRepository.GeoLocaleProjection pair : pairs) {
+                if (pair == null) {
+                    continue;
+                }
+                String geo = normalizeGeo(pair.getGeo());
+                String locale = normalizeLocale(pair.getLocale());
+                if (locale == null) {
+                    continue;
+                }
+                if (geo == null && locale.length() >= 5) {
+                    geo = locale.substring(3).toUpperCase(Locale.ROOT);
+                }
+                if (geo == null) {
+                    continue;
+                }
+                grouped.computeIfAbsent(geo, ignored -> new LinkedHashSet<>()).add(locale);
+            }
+
+            if (grouped.isEmpty()) {
+                return assetRegionLocaleService.getRegionOptionsSnapshot();
+            }
+
+            List<String> geos = new ArrayList<>(grouped.keySet());
+            Collections.sort(geos);
+            Map<String, List<String>> geoToLocales = new LinkedHashMap<>();
+            for (String geo : geos) {
+                List<String> locales = new ArrayList<>(grouped.getOrDefault(geo, new LinkedHashSet<>()));
+                Collections.sort(locales);
+                geoToLocales.put(geo, List.copyOf(locales));
+            }
+
+            return new AssetRegionLocaleService.RegionOptionsSnapshot(
+                    List.copyOf(geos),
+                    Map.copyOf(geoToLocales)
+            );
+        } catch (Exception e) {
+            logger.warn("Unable to derive region options from occurrence rows. Falling back to locale reference. Reason: {}",
+                    e.getMessage());
+            return assetRegionLocaleService.getRegionOptionsSnapshot();
+        }
     }
 
     /**

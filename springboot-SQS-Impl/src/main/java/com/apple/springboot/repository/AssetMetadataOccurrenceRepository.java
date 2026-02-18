@@ -15,6 +15,14 @@ import java.util.UUID;
 public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMetadataOccurrence, UUID> {
 
     /**
+     * Projection for distinct geo/locale combinations.
+     */
+    interface GeoLocaleProjection {
+        String getGeo();
+        String getLocale();
+    }
+
+    /**
      * Deletes occurrence rows for a raw_data_store record.
      */
     void deleteByRawDataId(UUID rawDataId);
@@ -67,4 +75,16 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
      */
     @Query("select distinct o.site from AssetMetadataOccurrence o where o.site is not null and o.site <> '' order by o.site")
     List<String> findDistinctSites();
+
+    /**
+     * Loads distinct geo/locale pairs from current extracted asset rows.
+     */
+    @Query("""
+            select distinct o.geo as geo, o.locale as locale
+            from AssetMetadataOccurrence o
+            where o.geo is not null and o.geo <> ''
+              and o.locale is not null and o.locale <> ''
+            order by o.geo, o.locale
+            """)
+    List<GeoLocaleProjection> findDistinctGeoLocalePairs();
 }

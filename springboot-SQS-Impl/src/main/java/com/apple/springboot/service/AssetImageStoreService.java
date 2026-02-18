@@ -69,6 +69,28 @@ public class AssetImageStoreService {
     private static final List<String> ENVIRONMENTS = List.of("stage", "prod", "qa");
     private static final List<String> DEFAULT_PROJECTS = List.of("rome");
     private static final List<String> DEFAULT_SITES = List.of("ipad", "mac");
+    private static final List<String> GEO_GROUP_ORDER = List.of(
+            "Europe", "IN", "JP", "KR", "SEA", "WW", "CEMEA", "ANZ", "ALAC-CA"
+    );
+    private static final Set<String> EUROPE_COUNTRIES = Set.of(
+            "AT", "BE", "BG", "CH", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "GB",
+            "GR", "HR", "HU", "IE", "IS", "IT", "LI", "LT", "LU", "LV", "MT", "NL", "NO",
+            "PL", "PT", "RO", "SE", "SI", "SK"
+    );
+    private static final Set<String> SEA_COUNTRIES = Set.of(
+            "SG", "MY", "TH", "VN", "ID", "PH", "BN", "KH", "LA", "MM"
+    );
+    private static final Set<String> ANZ_COUNTRIES = Set.of("AU", "NZ");
+    private static final Set<String> ALAC_CA_COUNTRIES = Set.of(
+            "CA", "MX", "AR", "BO", "BR", "CL", "CO", "CR", "DO", "EC",
+            "SV", "GT", "HN", "NI", "PA", "PY", "PE", "UY", "VE"
+    );
+    private static final Set<String> CEMEA_COUNTRIES = Set.of(
+            "AE", "SA", "QA", "KW", "OM", "BH", "JO", "IL", "EG", "MA", "TN", "DZ",
+            "ZA", "NG", "KE", "UG", "CM", "CI", "BW", "MZ", "MU", "SN", "CF", "GW",
+            "GN", "GQ", "ML", "NE", "AM", "AZ", "BY", "GE", "KZ", "KG", "MD", "ME",
+            "MK", "RU", "TJ", "TM", "UA", "UZ", "TR"
+    );
 
     private final AssetMetadataCatalogRepository catalogRepository;
     private final AssetMetadataOccurrenceRepository occurrenceRepository;
@@ -235,56 +257,44 @@ public class AssetImageStoreService {
      */
     private AssetRegionLocaleService.RegionOptionsSnapshot resolveRegionOptionsFromOccurrences() {
         if (!areTablesPresent()) {
-            return assetRegionLocaleService.getRegionOptionsSnapshot();
+            return toGeoGroupedSnapshot(assetRegionLocaleService.getRegionOptionsSnapshot());
         }
 
         try {
             List<AssetMetadataOccurrenceRepository.GeoLocaleProjection> pairs =
                     occurrenceRepository.findDistinctGeoLocalePairs();
             if (pairs == null || pairs.isEmpty()) {
-                return assetRegionLocaleService.getRegionOptionsSnapshot();
+                return toGeoGroupedSnapshot(assetRegionLocaleService.getRegionOptionsSnapshot());
             }
 
-            Map<String, LinkedHashSet<String>> grouped = new LinkedHashMap<>();
+            Map<String, List<String>> rawGeoToLocales = new LinkedHashMap<>();
             for (AssetMetadataOccurrenceRepository.GeoLocaleProjection pair : pairs) {
                 if (pair == null) {
                     continue;
                 }
-                String geo = normalizeGeo(pair.getGeo());
                 String locale = normalizeLocale(pair.getLocale());
                 if (locale == null) {
                     continue;
                 }
-                if (geo == null && locale.length() >= 5) {
-                    geo = locale.substring(3).toUpperCase(Locale.ROOT);
+                String rawGeo = normalizeGeo(pair.getGeo());
+                if (rawGeo == null && locale.length() >= 5) {
+                    rawGeo = locale.substring(3).toUpperCase(Locale.ROOT);
                 }
-                if (geo == null) {
+                if (rawGeo == null) {
                     continue;
                 }
-                grouped.computeIfAbsent(geo, ignored -> new LinkedHashSet<>()).add(locale);
+                rawGeoToLocales.computeIfAbsent(rawGeo, ignored -> new ArrayList<>()).add(locale);
             }
 
-            if (grouped.isEmpty()) {
-                return assetRegionLocaleService.getRegionOptionsSnapshot();
+            AssetRegionLocaleService.RegionOptionsSnapshot grouped = buildGeoGroupedSnapshot(rawGeoToLocales);
+            if (grouped.geos().isEmpty() || grouped.geoToLocales().isEmpty()) {
+                return toGeoGroupedSnapshot(assetRegionLocaleService.getRegionOptionsSnapshot());
             }
-
-            List<String> geos = new ArrayList<>(grouped.keySet());
-            Collections.sort(geos);
-            Map<String, List<String>> geoToLocales = new LinkedHashMap<>();
-            for (String geo : geos) {
-                List<String> locales = new ArrayList<>(grouped.getOrDefault(geo, new LinkedHashSet<>()));
-                Collections.sort(locales);
-                geoToLocales.put(geo, List.copyOf(locales));
-            }
-
-            return new AssetRegionLocaleService.RegionOptionsSnapshot(
-                    List.copyOf(geos),
-                    Map.copyOf(geoToLocales)
-            );
+            return grouped;
         } catch (Exception e) {
             logger.warn("Unable to derive region options from occurrence rows. Falling back to locale reference. Reason: {}",
                     e.getMessage());
-            return assetRegionLocaleService.getRegionOptionsSnapshot();
+            return toGeoGroupedSnapshot(assetRegionLocaleService.getRegionOptionsSnapshot());
         }
     }
 
@@ -301,11 +311,20 @@ public class AssetImageStoreService {
         String environment = normalizeText(safeRequest.getEnvironment());
         String project = normalizeText(safeRequest.getProject());
         String site = normalizeText(safeRequest.getSite());
-        String geo = normalizeGeo(safeRequest.getGeo());
+        String geo = normalizeText(safeRequest.getGeo());
         String locale = normalizeLocale(safeRequest.getLocale());
 
         if (locale == null && geo != null) {
             locale = mapGeoToLocale(geo).orElse(null);
+        }
+        if (locale != null) {
+            // Locale is the strongest selector and avoids mismatches with grouped geo labels.
+            geo = null;
+        } else if (geo != null && isConfiguredGeoGroup(geo)) {
+            // Grouped geos (Europe/SEA/...) are option labels, not stored raw occurrence values.
+            geo = null;
+        } else if (geo != null) {
+            geo = normalizeGeo(geo);
         }
 
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
@@ -1028,7 +1047,21 @@ public class AssetImageStoreService {
      * Maps geo values into default locale values.
      */
     private Optional<String> mapGeoToLocale(String geo) {
-        return assetRegionLocaleService.getDefaultLocaleForGeo(geo);
+        String normalized = normalizeText(geo);
+        if (normalized == null) {
+            return Optional.empty();
+        }
+        AssetRegionLocaleService.RegionOptionsSnapshot groupedSnapshot = resolveRegionOptionsFromOccurrences();
+        Optional<String> matchingGeo = groupedSnapshot.geos().stream()
+                .filter(value -> value.equalsIgnoreCase(normalized))
+                .findFirst();
+        if (matchingGeo.isPresent()) {
+            List<String> locales = groupedSnapshot.geoToLocales().get(matchingGeo.get());
+            if (locales != null && !locales.isEmpty()) {
+                return Optional.of(locales.get(0));
+            }
+        }
+        return assetRegionLocaleService.getDefaultLocaleForGeo(normalized);
     }
 
     /**
@@ -1039,10 +1072,141 @@ public class AssetImageStoreService {
         if (normalizedGeo == null) {
             return null;
         }
+        if (normalizedGeo.length() != 2) {
+            return null;
+        }
         if ("WW".equals(normalizedGeo)) {
             return "en_US";
         }
         return normalizeLocale("en_" + normalizedGeo);
+    }
+
+    /**
+     * Returns true when the geo filter value is one of configured group labels.
+     */
+    private boolean isConfiguredGeoGroup(String geo) {
+        if (geo == null) {
+            return false;
+        }
+        return GEO_GROUP_ORDER.stream().anyMatch(group -> group.equalsIgnoreCase(geo));
+    }
+
+    /**
+     * Normalizes raw geo/locale maps into configured business geo groups.
+     */
+    private AssetRegionLocaleService.RegionOptionsSnapshot buildGeoGroupedSnapshot(Map<String, ? extends java.util.Collection<String>> rawGeoToLocales) {
+        if (rawGeoToLocales == null || rawGeoToLocales.isEmpty()) {
+            return new AssetRegionLocaleService.RegionOptionsSnapshot(List.of(), Map.of());
+        }
+
+        Map<String, LinkedHashSet<String>> grouped = new LinkedHashMap<>();
+        for (Map.Entry<String, ? extends java.util.Collection<String>> entry : rawGeoToLocales.entrySet()) {
+            String rawGeo = normalizeGeo(entry.getKey());
+            java.util.Collection<String> locales = entry.getValue() != null ? entry.getValue() : List.of();
+
+            for (String localeRaw : locales) {
+                String locale = normalizeLocale(localeRaw);
+                if (locale == null) {
+                    continue;
+                }
+                String geoGroup = geoGroupFromLocale(locale);
+                grouped.computeIfAbsent(geoGroup, ignored -> new LinkedHashSet<>()).add(locale);
+            }
+
+            // Handle rows that may have geo but no locale values.
+            if (locales.isEmpty() && rawGeo != null) {
+                String geoGroup = geoGroupFromCountry(rawGeo);
+                String fallbackLocale = fallbackLocaleFromGeoCode(rawGeo);
+                if (fallbackLocale != null) {
+                    grouped.computeIfAbsent(geoGroup, ignored -> new LinkedHashSet<>()).add(fallbackLocale);
+                }
+            }
+        }
+
+        if (grouped.isEmpty()) {
+            return new AssetRegionLocaleService.RegionOptionsSnapshot(List.of(), Map.of());
+        }
+
+        List<String> geos = sortGeoGroups(grouped.keySet());
+        Map<String, List<String>> geoToLocales = new LinkedHashMap<>();
+        for (String geo : geos) {
+            List<String> locales = new ArrayList<>(grouped.getOrDefault(geo, new LinkedHashSet<>()));
+            Collections.sort(locales);
+            geoToLocales.put(geo, List.copyOf(locales));
+        }
+        return new AssetRegionLocaleService.RegionOptionsSnapshot(
+                List.copyOf(geos),
+                Map.copyOf(geoToLocales)
+        );
+    }
+
+    /**
+     * Converts a raw snapshot into grouped geo labels.
+     */
+    private AssetRegionLocaleService.RegionOptionsSnapshot toGeoGroupedSnapshot(
+            AssetRegionLocaleService.RegionOptionsSnapshot rawSnapshot) {
+        Map<String, List<String>> rawMap = rawSnapshot != null && rawSnapshot.geoToLocales() != null
+                ? rawSnapshot.geoToLocales()
+                : Map.of();
+        return buildGeoGroupedSnapshot(rawMap);
+    }
+
+    /**
+     * Sorts geo groups with configured business order first.
+     */
+    private List<String> sortGeoGroups(java.util.Collection<String> geoGroups) {
+        LinkedHashSet<String> remaining = new LinkedHashSet<>();
+        for (String group : geoGroups) {
+            if (group != null && !group.isBlank()) {
+                remaining.add(group);
+            }
+        }
+
+        List<String> ordered = new ArrayList<>();
+        for (String preferred : GEO_GROUP_ORDER) {
+            Optional<String> match = remaining.stream()
+                    .filter(value -> value.equalsIgnoreCase(preferred))
+                    .findFirst();
+            if (match.isPresent()) {
+                ordered.add(match.get());
+                remaining.remove(match.get());
+            }
+        }
+
+        List<String> extras = new ArrayList<>(remaining);
+        extras.sort(String::compareToIgnoreCase);
+        ordered.addAll(extras);
+        return ordered;
+    }
+
+    /**
+     * Maps a locale into one configured geo group.
+     */
+    private String geoGroupFromLocale(String locale) {
+        String normalized = normalizeLocale(locale);
+        if (normalized == null || normalized.length() < 5) {
+            return "WW";
+        }
+        return geoGroupFromCountry(normalized.substring(3).toUpperCase(Locale.ROOT));
+    }
+
+    /**
+     * Maps a country code into one configured geo group.
+     */
+    private String geoGroupFromCountry(String countryCode) {
+        String country = normalizeGeo(countryCode);
+        if (country == null) {
+            return "WW";
+        }
+        if ("IN".equals(country)) return "IN";
+        if ("JP".equals(country)) return "JP";
+        if ("KR".equals(country)) return "KR";
+        if (ANZ_COUNTRIES.contains(country)) return "ANZ";
+        if (SEA_COUNTRIES.contains(country)) return "SEA";
+        if (ALAC_CA_COUNTRIES.contains(country)) return "ALAC-CA";
+        if (EUROPE_COUNTRIES.contains(country)) return "Europe";
+        if (CEMEA_COUNTRIES.contains(country)) return "CEMEA";
+        return "WW";
     }
 
     /**

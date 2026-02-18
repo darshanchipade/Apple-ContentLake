@@ -1,5 +1,5 @@
 -- Asset Finder region/locale reference table
--- Sync target for https://www.apple.com/choose-country-region/
+-- Upload-driven locale tracking reference for Asset Finder options.
 
 BEGIN;
 
@@ -40,6 +40,20 @@ BEGIN
     END IF;
 END $$;
 
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        WHERE c.conname = 'uk_asset_region_locale_ref_source_locale'
+          AND c.conrelid = 'asset_region_locale_ref'::regclass
+    ) THEN
+        ALTER TABLE asset_region_locale_ref
+            ADD CONSTRAINT uk_asset_region_locale_ref_source_locale
+            UNIQUE (source_type, locale_code);
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_asset_region_locale_ref_geo
     ON asset_region_locale_ref (geo_code);
 
@@ -54,24 +68,5 @@ CREATE INDEX IF NOT EXISTS idx_asset_region_locale_ref_source_type
 
 CREATE INDEX IF NOT EXISTS idx_asset_region_locale_ref_active
     ON asset_region_locale_ref (active);
-
--- Safety defaults if sync has not run yet.
-INSERT INTO asset_region_locale_ref (id, geo_code, locale_code, display_name, apple_path, source_type, active, last_seen_at, seen_count)
-SELECT '00000000-0000-0000-0000-0000000000a1'::uuid, 'WW', 'en_US', 'Worldwide (fallback)', '/us/', 'APPLE', TRUE, NOW(), 1
-WHERE NOT EXISTS (
-    SELECT 1 FROM asset_region_locale_ref WHERE source_type = 'APPLE' AND geo_code = 'WW' AND locale_code = 'en_US'
-);
-
-INSERT INTO asset_region_locale_ref (id, geo_code, locale_code, display_name, apple_path, source_type, active, last_seen_at, seen_count)
-SELECT '00000000-0000-0000-0000-0000000000a2'::uuid, 'JP', 'ja_JP', 'Japan (fallback)', '/jp/', 'APPLE', TRUE, NOW(), 1
-WHERE NOT EXISTS (
-    SELECT 1 FROM asset_region_locale_ref WHERE source_type = 'APPLE' AND geo_code = 'JP' AND locale_code = 'ja_JP'
-);
-
-INSERT INTO asset_region_locale_ref (id, geo_code, locale_code, display_name, apple_path, source_type, active, last_seen_at, seen_count)
-SELECT '00000000-0000-0000-0000-0000000000a3'::uuid, 'KR', 'ko_KR', 'Korea (fallback)', '/kr/', 'APPLE', TRUE, NOW(), 1
-WHERE NOT EXISTS (
-    SELECT 1 FROM asset_region_locale_ref WHERE source_type = 'APPLE' AND geo_code = 'KR' AND locale_code = 'ko_KR'
-);
 
 COMMIT;

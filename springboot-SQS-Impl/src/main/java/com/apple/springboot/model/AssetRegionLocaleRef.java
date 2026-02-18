@@ -28,6 +28,10 @@ import java.util.UUID;
                 @UniqueConstraint(
                         name = "uk_asset_region_locale_ref_path_display",
                         columnNames = {"apple_path", "display_name"}
+                ),
+                @UniqueConstraint(
+                        name = "uk_asset_region_locale_ref_source_locale",
+                        columnNames = {"source_type", "locale_code"}
                 )
         },
         indexes = {

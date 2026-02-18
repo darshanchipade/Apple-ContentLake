@@ -128,14 +128,20 @@ public class AssetImageStoreService {
         if (rootNode == null || rawDataStore == null || rawDataStore.getId() == null) {
             return;
         }
-        if (!areTablesPresent()) {
-            return;
-        }
 
         try {
             UploadRequestMetadata requestMetadata = parseRequestMetadata(rawDataStore.getSourceRequestMetadata());
             List<ExtractedAssetCandidate> extracted = extractAssets(rootNode, rawDataStore, requestMetadata);
             List<ExtractedAssetCandidate> deduplicatedBySlot = deduplicateBySlot(extracted);
+
+            // Track observed geo/locale pairs from this upload independently of asset occurrence writes.
+            assetRegionLocaleService.recordUploadObservations(
+                    buildUploadRegionObservations(deduplicatedBySlot, requestMetadata)
+            );
+
+            if (!areTablesPresent()) {
+                return;
+            }
 
             // Replace the full occurrence snapshot for this source/version to avoid replay collisions.
             if (rawDataStore.getSourceUri() != null && rawDataStore.getVersion() != null) {
@@ -476,6 +482,82 @@ public class AssetImageStoreService {
         for (ExtractedAssetCandidate candidate : extracted) {
             if (candidate == null) continue;
             deduped.putIfAbsent(candidate.assetSlotKey(), candidate);
+        }
+        return new ArrayList<>(deduped.values());
+    }
+
+    /**
+     * Builds upload-derived region/locale observations for reference table upserts.
+     */
+    private List<AssetRegionLocaleService.RegionLocaleObservation> buildUploadRegionObservations(
+            List<ExtractedAssetCandidate> candidates,
+            UploadRequestMetadata requestMetadata) {
+        String requestLocale = requestMetadata != null ? normalizeLocale(requestMetadata.locale()) : null;
+        String requestGeo = requestMetadata != null ? normalizeGeo(requestMetadata.geo()) : null;
+        if (requestGeo == null && requestLocale != null && requestLocale.length() >= 5) {
+            requestGeo = requestLocale.substring(3).toUpperCase(Locale.ROOT);
+        }
+        if (requestLocale == null && requestGeo != null) {
+            requestLocale = mapGeoToLocale(requestGeo).orElseGet(() -> fallbackLocaleFromGeoCode(requestGeo));
+        }
+
+        if (candidates == null || candidates.isEmpty()) {
+            if (requestGeo == null || requestLocale == null) {
+                return List.of();
+            }
+            return List.of(new AssetRegionLocaleService.RegionLocaleObservation(
+                    requestGeo,
+                    requestLocale,
+                    "Uploaded locale " + requestLocale,
+                    toStorefrontPathFromLocale(requestLocale)
+            ));
+        }
+        Map<String, AssetRegionLocaleService.RegionLocaleObservation> deduped = new LinkedHashMap<>();
+        for (ExtractedAssetCandidate candidate : candidates) {
+            if (candidate == null) {
+                continue;
+            }
+            String locale = normalizeLocale(candidate.locale());
+            String geo = normalizeGeo(candidate.geo());
+            if (geo == null && locale != null && locale.length() >= 5) {
+                geo = locale.substring(3).toUpperCase(Locale.ROOT);
+            }
+            if (locale == null && geo != null) {
+                locale = mapGeoToLocale(geo).orElseGet(() -> fallbackLocaleFromGeoCode(geo));
+            }
+            if (geo == null || locale == null) {
+                continue;
+            }
+            String key = geo + "|" + locale;
+            deduped.putIfAbsent(
+                    key,
+                    new AssetRegionLocaleService.RegionLocaleObservation(
+                            geo,
+                            locale,
+                            "Uploaded locale " + locale,
+                            toStorefrontPathFromLocale(locale)
+                    )
+            );
+        }
+        if (requestGeo != null && requestLocale != null) {
+            String key = requestGeo + "|" + requestLocale;
+            deduped.putIfAbsent(
+                    key,
+                    new AssetRegionLocaleService.RegionLocaleObservation(
+                            requestGeo,
+                            requestLocale,
+                            "Uploaded locale " + requestLocale,
+                            toStorefrontPathFromLocale(requestLocale)
+                    )
+            );
+        }
+        if (deduped.isEmpty() && requestGeo != null && requestLocale != null) {
+            return List.of(new AssetRegionLocaleService.RegionLocaleObservation(
+                    requestGeo,
+                    requestLocale,
+                    "Uploaded locale " + requestLocale,
+                    toStorefrontPathFromLocale(requestLocale)
+            ));
         }
         return new ArrayList<>(deduped.values());
     }
@@ -881,12 +963,7 @@ public class AssetImageStoreService {
         if (locale == null || locale.length() < 5) {
             return null;
         }
-        String country = locale.substring(3).toUpperCase(Locale.ROOT);
-        return switch (country) {
-            case "JP" -> "JP";
-            case "KR" -> "KR";
-            default -> "WW";
-        };
+        return locale.substring(3).toUpperCase(Locale.ROOT);
     }
 
     /**
@@ -894,6 +971,20 @@ public class AssetImageStoreService {
      */
     private Optional<String> mapGeoToLocale(String geo) {
         return assetRegionLocaleService.getDefaultLocaleForGeo(geo);
+    }
+
+    /**
+     * Provides a deterministic locale fallback when no mapping exists yet.
+     */
+    private String fallbackLocaleFromGeoCode(String geo) {
+        String normalizedGeo = normalizeGeo(geo);
+        if (normalizedGeo == null) {
+            return null;
+        }
+        if ("WW".equals(normalizedGeo)) {
+            return "en_US";
+        }
+        return normalizeLocale("en_" + normalizedGeo);
     }
 
     /**
@@ -977,6 +1068,22 @@ public class AssetImageStoreService {
             return "http://www.apple.com" + normalized;
         }
         return "http://www.apple.com/" + normalized;
+    }
+
+    /**
+     * Converts locale values into storefront-like paths for region references.
+     */
+    private String toStorefrontPathFromLocale(String locale) {
+        String normalized = normalizeLocale(locale);
+        if (normalized == null || normalized.length() < 5) {
+            return "/us/";
+        }
+        String language = normalized.substring(0, 2).toLowerCase(Locale.ROOT);
+        String country = normalized.substring(3).toLowerCase(Locale.ROOT);
+        if ("en".equals(language)) {
+            return "/" + country + "/";
+        }
+        return "/" + country + "/" + language + "/";
     }
 
     /**

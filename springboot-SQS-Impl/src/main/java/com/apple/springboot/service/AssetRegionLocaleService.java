@@ -19,6 +19,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -37,16 +38,18 @@ import java.util.regex.Pattern;
 /**
  * Maintains geo/locale reference data for Asset Finder options.
  *
- * Strategy:
- * - Source of truth: asset_region_locale_ref table.
- * - Sync source: https://www.apple.com/choose-country-region/
- * - Cache: in-memory with TTL.
- * - Fallback: last known DB rows, then static defaults.
+ * Priority model:
+ * - Primary: UPLOAD-derived locale/geo rows observed during extraction.
+ * - Secondary: APPLE-derived rows synced from choose-country-region page.
+ * - Last fallback: static defaults.
  */
 @Service
 public class AssetRegionLocaleService {
 
     private static final Logger logger = LoggerFactory.getLogger(AssetRegionLocaleService.class);
+
+    public static final String SOURCE_UPLOAD = "UPLOAD";
+    public static final String SOURCE_APPLE = "APPLE";
 
     private static final Pattern ANCHOR_PATTERN = Pattern.compile(
             "<a\\b[^>]*?href\\s*=\\s*\"([^\"]+)\"[^>]*>(.*?)</a>",
@@ -68,7 +71,13 @@ public class AssetRegionLocaleService {
             Map.entry("MO", "zh"),
             Map.entry("TH", "th"),
             Map.entry("VN", "vi"),
-            Map.entry("UA", "uk")
+            Map.entry("UA", "uk"),
+            Map.entry("UK", "en")
+    );
+
+    private static final Map<String, String> GEO_TO_LOCALE_COUNTRY = Map.ofEntries(
+            Map.entry("WW", "US"),
+            Map.entry("UK", "GB")
     );
 
     private static final Map<String, List<String>> FALLBACK_GEO_TO_LOCALES = Map.of(
@@ -89,8 +98,11 @@ public class AssetRegionLocaleService {
     // If schema changes while running, restart app. Until true, keep rechecking.
     private volatile Boolean tablePresent;
 
-    @Value("${app.asset-finder.region-sync.enabled:true}")
+    @Value("${app.asset-finder.region-sync.enabled:false}")
     private boolean syncEnabled;
+
+    @Value("${app.asset-finder.region-options.upload-only:true}")
+    private boolean uploadOnlyOptions;
 
     @Value("${app.asset-finder.region-source-url:https://www.apple.com/choose-country-region/}")
     private String regionSourceUrl;
@@ -129,7 +141,7 @@ public class AssetRegionLocaleService {
     }
 
     /**
-     * Runs periodic sync from Apple region page to keep reference table current.
+     * Runs periodic sync from Apple region page to keep APPLE rows current.
      */
     @Scheduled(
             initialDelayString = "${app.asset-finder.region-sync-initial-delay-ms:60000}",
@@ -177,6 +189,99 @@ public class AssetRegionLocaleService {
     }
 
     /**
+     * Upserts upload-derived geo/locale observations into reference table.
+     */
+    public void recordUploadObservations(java.util.Collection<RegionLocaleObservation> observations) {
+        if (observations == null || observations.isEmpty() || !isTablePresent()) {
+            return;
+        }
+        try {
+            OffsetDateTime now = OffsetDateTime.now();
+            List<AssetRegionLocaleRef> allRows = repository.findAll();
+            Map<String, AssetRegionLocaleRef> existingByKey = new HashMap<>();
+            for (AssetRegionLocaleRef row : allRows) {
+                if (!SOURCE_UPLOAD.equals(normalizeSourceType(row.getSourceType()))) {
+                    continue;
+                }
+                String key = sourceGeoLocaleKey(SOURCE_UPLOAD, normalizeGeo(row.getGeoCode()), normalizeLocale(row.getLocaleCode()));
+                if (key != null) {
+                    existingByKey.put(key, row);
+                }
+            }
+
+            Map<String, RegionLocaleObservation> normalizedObservations = new LinkedHashMap<>();
+            for (RegionLocaleObservation observation : observations) {
+                if (observation == null) continue;
+                String geo = normalizeGeo(observation.geoCode());
+                String locale = normalizeLocale(observation.localeCode());
+
+                if (geo == null && locale != null && locale.length() >= 5) {
+                    geo = locale.substring(3).toUpperCase(Locale.ROOT);
+                }
+                if (geo == null || locale == null) {
+                    continue;
+                }
+
+                String displayName = normalizeDisplayName(observation.displayName());
+                if (displayName == null) {
+                    displayName = "Uploaded locale " + locale;
+                }
+                String applePath = normalizeStorefrontPath(observation.applePath());
+                if (applePath == null) {
+                    applePath = buildStorefrontPathFromLocale(locale);
+                }
+                String key = sourceGeoLocaleKey(SOURCE_UPLOAD, geo, locale);
+                if (key != null) {
+                    normalizedObservations.putIfAbsent(key, new RegionLocaleObservation(geo, locale, displayName, applePath));
+                }
+            }
+
+            if (normalizedObservations.isEmpty()) {
+                return;
+            }
+
+            List<AssetRegionLocaleRef> changedRows = new ArrayList<>();
+            for (RegionLocaleObservation observation : normalizedObservations.values()) {
+                String key = sourceGeoLocaleKey(SOURCE_UPLOAD, observation.geoCode(), observation.localeCode());
+                AssetRegionLocaleRef row = existingByKey.get(key);
+                if (row == null) {
+                    row = new AssetRegionLocaleRef();
+                    row.setSourceType(SOURCE_UPLOAD);
+                    row.setGeoCode(observation.geoCode());
+                    row.setLocaleCode(observation.localeCode());
+                    row.setDisplayName(observation.displayName());
+                    row.setApplePath(observation.applePath());
+                    row.setActive(true);
+                    row.setLastSeenAt(now);
+                    row.setSeenCount(1L);
+                    changedRows.add(row);
+                    continue;
+                }
+
+                row.setSourceType(SOURCE_UPLOAD);
+                row.setActive(true);
+                row.setLastSeenAt(now);
+                row.setSeenCount(Optional.ofNullable(row.getSeenCount()).orElse(0L) + 1L);
+                // Keep fields fresh when better values are observed.
+                if (StringUtils.hasText(observation.displayName())) {
+                    row.setDisplayName(observation.displayName());
+                }
+                if (StringUtils.hasText(observation.applePath())) {
+                    row.setApplePath(observation.applePath());
+                }
+                changedRows.add(row);
+            }
+
+            if (!changedRows.isEmpty()) {
+                repository.saveAll(changedRows);
+                refreshCacheFromDb();
+            }
+        } catch (Exception e) {
+            logger.warn("Failed to upsert upload-derived region/locale observations. Continuing. Reason: {}", e.getMessage());
+        }
+    }
+
+    /**
      * Attempts remote sync and degrades gracefully when unavailable.
      */
     void syncFromRemote(String trigger) {
@@ -192,7 +297,51 @@ public class AssetRegionLocaleService {
                 refreshCacheFromDb();
                 return;
             }
-            upsertReferenceRows(parsedEntries);
+
+            OffsetDateTime now = OffsetDateTime.now();
+            List<AssetRegionLocaleRef> allRows = repository.findAll();
+            Map<String, AssetRegionLocaleRef> existingByKey = new HashMap<>();
+            for (AssetRegionLocaleRef row : allRows) {
+                if (!SOURCE_APPLE.equals(normalizeSourceType(row.getSourceType()))) {
+                    continue;
+                }
+                String key = sourceGeoLocaleKey(SOURCE_APPLE, normalizeGeo(row.getGeoCode()), normalizeLocale(row.getLocaleCode()));
+                if (key != null) {
+                    existingByKey.put(key, row);
+                }
+            }
+
+            List<AssetRegionLocaleRef> changedRows = new ArrayList<>();
+            for (ParsedRegionEntry entry : parsedEntries) {
+                String key = sourceGeoLocaleKey(SOURCE_APPLE, entry.geoCode(), entry.localeCode());
+                if (key == null) continue;
+                AssetRegionLocaleRef row = existingByKey.get(key);
+                if (row == null) {
+                    row = new AssetRegionLocaleRef();
+                    row.setSourceType(SOURCE_APPLE);
+                    row.setGeoCode(entry.geoCode());
+                    row.setLocaleCode(entry.localeCode());
+                    row.setDisplayName(entry.displayName());
+                    row.setApplePath(entry.applePath());
+                    row.setActive(true);
+                    row.setLastSeenAt(now);
+                    row.setSeenCount(1L);
+                    changedRows.add(row);
+                    continue;
+                }
+
+                row.setSourceType(SOURCE_APPLE);
+                row.setActive(true);
+                row.setLastSeenAt(now);
+                row.setSeenCount(Optional.ofNullable(row.getSeenCount()).orElse(0L) + 1L);
+                row.setDisplayName(entry.displayName());
+                row.setApplePath(entry.applePath());
+                changedRows.add(row);
+            }
+
+            if (!changedRows.isEmpty()) {
+                repository.saveAll(changedRows);
+            }
             refreshCacheFromDb();
             logger.info("Region sync ({}) completed successfully with {} entries.", trigger, parsedEntries.size());
         } catch (Exception e) {
@@ -219,12 +368,34 @@ public class AssetRegionLocaleService {
             return buildFallbackSnapshot();
         }
         try {
-            List<AssetRegionLocaleRef> rows = repository.findByActiveTrueOrderByGeoCodeAscDisplayNameAscApplePathAsc();
-            if (rows == null || rows.isEmpty()) {
+            List<AssetRegionLocaleRef> uploadRows =
+                    repository.findByActiveTrueAndSourceTypeOrderByGeoCodeAscLocaleCodeAscDisplayNameAsc(SOURCE_UPLOAD);
+            List<AssetRegionLocaleRef> appleRows =
+                    repository.findByActiveTrueAndSourceTypeOrderByGeoCodeAscLocaleCodeAscDisplayNameAsc(SOURCE_APPLE);
+
+            List<AssetRegionLocaleRef> chosen;
+            if (!uploadRows.isEmpty() && uploadOnlyOptions) {
+                chosen = uploadRows;
+            } else if (!uploadRows.isEmpty()) {
+                chosen = new ArrayList<>(uploadRows);
+                chosen.addAll(appleRows);
+            } else if (!appleRows.isEmpty()) {
+                chosen = appleRows;
+            } else {
+                chosen = repository.findByActiveTrueOrderByGeoCodeAscDisplayNameAscApplePathAsc();
+            }
+
+            if (chosen == null || chosen.isEmpty()) {
                 return buildFallbackSnapshot();
             }
-            RegionOptionsSnapshot snapshot = buildSnapshotFromRows(rows);
+            RegionOptionsSnapshot snapshot = buildSnapshotFromRows(chosen);
             if (snapshot.geos().isEmpty() || snapshot.geoToLocales().isEmpty()) {
+                if (!appleRows.isEmpty() && !Objects.equals(chosen, appleRows)) {
+                    RegionOptionsSnapshot appleSnapshot = buildSnapshotFromRows(appleRows);
+                    if (!appleSnapshot.geos().isEmpty() && !appleSnapshot.geoToLocales().isEmpty()) {
+                        return appleSnapshot;
+                    }
+                }
                 return buildFallbackSnapshot();
             }
             return snapshot;
@@ -244,32 +415,23 @@ public class AssetRegionLocaleService {
                 continue;
             }
             String geo = normalizeGeo(row.getGeoCode());
-            if (geo == null) {
+            String locale = normalizeLocale(row.getLocaleCode());
+            if (geo == null || locale == null) {
                 continue;
             }
-            grouped.computeIfAbsent(geo, ignored -> new LinkedHashSet<>());
-            String locale = normalizeLocale(row.getLocaleCode());
-            if (locale != null) {
-                grouped.get(geo).add(locale);
-            }
+            grouped.computeIfAbsent(geo, ignored -> new LinkedHashSet<>()).add(locale);
         }
 
-        // Always keep minimal defaults available for safety.
-        FALLBACK_GEO_TO_LOCALES.forEach((geo, locales) -> {
-            grouped.computeIfAbsent(geo, ignored -> new LinkedHashSet<>());
-            locales.stream()
-                    .map(this::normalizeLocale)
-                    .filter(Objects::nonNull)
-                    .forEach(grouped.get(geo)::add);
-        });
+        if (grouped.isEmpty()) {
+            return buildFallbackSnapshot();
+        }
 
         List<String> geos = new ArrayList<>(grouped.keySet());
         Collections.sort(geos);
 
         Map<String, List<String>> geoToLocales = new LinkedHashMap<>();
         for (String geo : geos) {
-            LinkedHashSet<String> rawLocales = grouped.getOrDefault(geo, new LinkedHashSet<>());
-            List<String> locales = new ArrayList<>(rawLocales);
+            List<String> locales = new ArrayList<>(grouped.getOrDefault(geo, new LinkedHashSet<>()));
             Collections.sort(locales);
             if (locales.isEmpty()) {
                 String fallbackLocale = fallbackLocaleForGeo(geo);
@@ -300,55 +462,6 @@ public class AssetRegionLocaleService {
             geoToLocales.put(geo, locales);
         }
         return new RegionOptionsSnapshot(List.copyOf(geos), Map.copyOf(geoToLocales));
-    }
-
-    /**
-     * Upserts parsed rows and deactivates records not found in the latest source snapshot.
-     */
-    private void upsertReferenceRows(List<ParsedRegionEntry> parsedEntries) {
-        List<AssetRegionLocaleRef> existingRows = repository.findAll();
-        Map<String, AssetRegionLocaleRef> existingByKey = new HashMap<>();
-        for (AssetRegionLocaleRef row : existingRows) {
-            existingByKey.put(rowKey(row.getApplePath(), row.getDisplayName()), row);
-        }
-
-        List<AssetRegionLocaleRef> changedRows = new ArrayList<>();
-
-        for (ParsedRegionEntry entry : parsedEntries) {
-            String key = rowKey(entry.applePath(), entry.displayName());
-            AssetRegionLocaleRef row = existingByKey.get(key);
-            boolean isNew = row == null;
-            if (isNew) {
-                row = new AssetRegionLocaleRef();
-            }
-
-            boolean changed = false;
-            changed |= assignIfChanged(row::getGeoCode, row::setGeoCode, entry.geoCode());
-            changed |= assignIfChanged(row::getLocaleCode, row::setLocaleCode, entry.localeCode());
-            changed |= assignIfChanged(row::getDisplayName, row::setDisplayName, entry.displayName());
-            changed |= assignIfChanged(row::getApplePath, row::setApplePath, entry.applePath());
-            changed |= assignIfChanged(row::getActive, row::setActive, true);
-
-            if (isNew || changed) {
-                changedRows.add(row);
-            }
-        }
-
-        if (!changedRows.isEmpty()) {
-            repository.saveAll(changedRows);
-        }
-    }
-
-    /**
-     * Helper to avoid unnecessary persistence updates.
-     */
-    private <T> boolean assignIfChanged(ValueReader<T> reader, ValueWriter<T> writer, T nextValue) {
-        T currentValue = reader.read();
-        if (Objects.equals(currentValue, nextValue)) {
-            return false;
-        }
-        writer.write(nextValue);
-        return true;
     }
 
     /**
@@ -383,13 +496,9 @@ public class AssetRegionLocaleService {
         Matcher matcher = ANCHOR_PATTERN.matcher(html);
         while (matcher.find()) {
             String storefrontPath = normalizeStorefrontPath(matcher.group(1));
-            if (storefrontPath == null) {
-                continue;
-            }
+            if (storefrontPath == null) continue;
             String displayName = normalizeDisplayName(matcher.group(2));
-            if (displayName == null) {
-                continue;
-            }
+            if (displayName == null) continue;
             rawEntries.add(new RawAnchorEntry(storefrontPath, displayName));
             collectExplicitLanguage(storefrontPath, explicitLanguagesByGeo);
         }
@@ -397,19 +506,15 @@ public class AssetRegionLocaleService {
         Map<String, ParsedRegionEntry> deduped = new LinkedHashMap<>();
         for (RawAnchorEntry raw : rawEntries) {
             ParsedRegionEntry parsed = mapPathToEntry(raw, explicitLanguagesByGeo);
-            if (parsed == null) {
-                continue;
-            }
-            String key = parsed.geoCode() + "|" + Optional.ofNullable(parsed.localeCode()).orElse("")
-                    + "|" + parsed.applePath() + "|" + parsed.displayName();
+            if (parsed == null) continue;
+            String key = parsed.geoCode() + "|" + parsed.localeCode();
             deduped.putIfAbsent(key, parsed);
         }
 
         return deduped.values().stream()
                 .sorted(Comparator
                         .comparing(ParsedRegionEntry::geoCode)
-                        .thenComparing(ParsedRegionEntry::applePath)
-                        .thenComparing(ParsedRegionEntry::displayName))
+                        .thenComparing(ParsedRegionEntry::localeCode))
                 .toList();
     }
 
@@ -422,31 +527,30 @@ public class AssetRegionLocaleService {
         if (langPath.matches()) {
             String geo = normalizeGeo(langPath.group(1));
             String language = normalizeLanguage(langPath.group(2));
-            if (geo == null || language == null) {
-                return null;
-            }
-            return new ParsedRegionEntry(geo, normalizeLocale(language + "_" + geo), raw.displayName(), raw.applePath());
+            if (geo == null || language == null) return null;
+            String locale = normalizeLocale(language + "_" + localeCountryForGeo(geo));
+            if (locale == null) return null;
+            return new ParsedRegionEntry(geo, locale, raw.displayName(), raw.applePath());
         }
 
         Matcher langHyphen = COUNTRY_LANGUAGE_HYPHEN_PATTERN.matcher(raw.applePath());
         if (langHyphen.matches()) {
             String geo = normalizeGeo(langHyphen.group(1));
             String language = normalizeLanguage(langHyphen.group(2));
-            if (geo == null || language == null) {
-                return null;
-            }
-            return new ParsedRegionEntry(geo, normalizeLocale(language + "_" + geo), raw.displayName(), raw.applePath());
+            if (geo == null || language == null) return null;
+            String locale = normalizeLocale(language + "_" + localeCountryForGeo(geo));
+            if (locale == null) return null;
+            return new ParsedRegionEntry(geo, locale, raw.displayName(), raw.applePath());
         }
 
         Matcher countryOnly = COUNTRY_ONLY_PATTERN.matcher(raw.applePath());
         if (countryOnly.matches()) {
             String geo = normalizeGeo(countryOnly.group(1));
-            if (geo == null) {
-                return null;
-            }
+            if (geo == null) return null;
             Set<String> explicitLanguages = explicitLanguagesByGeo.getOrDefault(geo, Set.of());
             String defaultLanguage = resolveDefaultLanguage(geo, explicitLanguages);
-            String locale = defaultLanguage != null ? normalizeLocale(defaultLanguage + "_" + geo) : null;
+            String locale = normalizeLocale(defaultLanguage + "_" + localeCountryForGeo(geo));
+            if (locale == null) return null;
             return new ParsedRegionEntry(geo, locale, raw.displayName(), raw.applePath());
         }
 
@@ -459,17 +563,13 @@ public class AssetRegionLocaleService {
     private void collectExplicitLanguage(String storefrontPath, Map<String, Set<String>> explicitLanguagesByGeo) {
         Matcher langPath = COUNTRY_LANGUAGE_PATH_PATTERN.matcher(storefrontPath);
         if (langPath.matches()) {
-            String geo = normalizeGeo(langPath.group(1));
-            String language = normalizeLanguage(langPath.group(2));
-            addLanguageHint(explicitLanguagesByGeo, geo, language);
+            addLanguageHint(explicitLanguagesByGeo, normalizeGeo(langPath.group(1)), normalizeLanguage(langPath.group(2)));
             return;
         }
 
         Matcher langHyphen = COUNTRY_LANGUAGE_HYPHEN_PATTERN.matcher(storefrontPath);
         if (langHyphen.matches()) {
-            String geo = normalizeGeo(langHyphen.group(1));
-            String language = normalizeLanguage(langHyphen.group(2));
-            addLanguageHint(explicitLanguagesByGeo, geo, language);
+            addLanguageHint(explicitLanguagesByGeo, normalizeGeo(langHyphen.group(1)), normalizeLanguage(langHyphen.group(2)));
         }
     }
 
@@ -477,9 +577,7 @@ public class AssetRegionLocaleService {
      * Adds one explicit language hint into the in-memory map.
      */
     private void addLanguageHint(Map<String, Set<String>> hints, String geo, String language) {
-        if (geo == null || language == null) {
-            return;
-        }
+        if (geo == null || language == null) return;
         hints.computeIfAbsent(geo, ignored -> new LinkedHashSet<>()).add(language);
     }
 
@@ -487,24 +585,23 @@ public class AssetRegionLocaleService {
      * Derives a default language code for bare geo-only storefront paths.
      */
     private String resolveDefaultLanguage(String geo, Set<String> explicitLanguages) {
-        if (explicitLanguages != null && explicitLanguages.contains("en")) {
-            return "en";
-        }
-        if (explicitLanguages != null && explicitLanguages.contains("ar")) {
-            // For "/xx-ar/" plus "/xx/", the country root is usually English.
-            return "en";
-        }
         String override = DEFAULT_LANGUAGE_BY_GEO.get(geo);
         if (override != null) {
             return override;
         }
+        if (explicitLanguages != null && explicitLanguages.contains("en")) {
+            return "en";
+        }
+        if (explicitLanguages != null && explicitLanguages.contains("ar") && explicitLanguages.size() == 1) {
+            // For "/xx-ar/" plus "/xx/", the root URL typically serves English.
+            return "en";
+        }
         if (explicitLanguages != null && explicitLanguages.size() == 1) {
             return explicitLanguages.iterator().next();
         }
-
         String isoGuess = geo.toLowerCase(Locale.ROOT);
         if (ISO_LANGUAGE_CODES.contains(isoGuess)
-                && LANGUAGE_COUNTRY_COMBINATIONS.contains(isoGuess + "_" + geo)) {
+                && LANGUAGE_COUNTRY_COMBINATIONS.contains(isoGuess + "_" + localeCountryForGeo(geo))) {
             return isoGuess;
         }
         return "en";
@@ -514,35 +611,22 @@ public class AssetRegionLocaleService {
      * Normalizes and validates storefront paths that represent region links.
      */
     private String normalizeStorefrontPath(String rawPath) {
-        if (!StringUtils.hasText(rawPath)) {
-            return null;
-        }
+        if (!StringUtils.hasText(rawPath)) return null;
         String trimmed = rawPath.trim();
         int queryIndex = trimmed.indexOf('?');
-        if (queryIndex >= 0) {
-            trimmed = trimmed.substring(0, queryIndex);
-        }
+        if (queryIndex >= 0) trimmed = trimmed.substring(0, queryIndex);
         int hashIndex = trimmed.indexOf('#');
-        if (hashIndex >= 0) {
-            trimmed = trimmed.substring(0, hashIndex);
-        }
-        if (!trimmed.startsWith("/")) {
-            return null;
-        }
+        if (hashIndex >= 0) trimmed = trimmed.substring(0, hashIndex);
+        if (!trimmed.startsWith("/")) return null;
+
         String normalized = trimmed.toLowerCase(Locale.ROOT);
         if (!normalized.endsWith("/")) {
             normalized = normalized + "/";
         }
 
-        if (COUNTRY_ONLY_PATTERN.matcher(normalized).matches()) {
-            return normalized;
-        }
-        if (COUNTRY_LANGUAGE_PATH_PATTERN.matcher(normalized).matches()) {
-            return normalized;
-        }
-        if (COUNTRY_LANGUAGE_HYPHEN_PATTERN.matcher(normalized).matches()) {
-            return normalized;
-        }
+        if (COUNTRY_ONLY_PATTERN.matcher(normalized).matches()) return normalized;
+        if (COUNTRY_LANGUAGE_PATH_PATTERN.matcher(normalized).matches()) return normalized;
+        if (COUNTRY_LANGUAGE_HYPHEN_PATTERN.matcher(normalized).matches()) return normalized;
         return null;
     }
 
@@ -550,13 +634,27 @@ public class AssetRegionLocaleService {
      * Normalizes display labels from HTML anchor text.
      */
     private String normalizeDisplayName(String htmlText) {
-        if (!StringUtils.hasText(htmlText)) {
-            return null;
-        }
+        if (!StringUtils.hasText(htmlText)) return null;
         String withoutTags = HTML_TAG_PATTERN.matcher(htmlText).replaceAll(" ");
         String decoded = HtmlUtils.htmlUnescape(withoutTags);
         String normalized = decoded.replaceAll("\\s+", " ").trim();
         return normalized.isEmpty() ? null : normalized;
+    }
+
+    /**
+     * Converts locale into storefront path used for upload observations.
+     */
+    private String buildStorefrontPathFromLocale(String locale) {
+        String normalized = normalizeLocale(locale);
+        if (normalized == null || normalized.length() < 5) {
+            return "/us/";
+        }
+        String language = normalized.substring(0, 2).toLowerCase(Locale.ROOT);
+        String country = normalized.substring(3).toLowerCase(Locale.ROOT);
+        if ("en".equals(language)) {
+            return "/" + country + "/";
+        }
+        return "/" + country + "/" + language + "/";
     }
 
     /**
@@ -583,20 +681,27 @@ public class AssetRegionLocaleService {
     }
 
     /**
-     * Builds a stable key for detecting existing rows by path/display combination.
+     * Normalizes a source type label.
      */
-    private String rowKey(String applePath, String displayName) {
-        return normalizeLower(applePath) + "|" + normalizeLower(displayName);
+    private String normalizeSourceType(String sourceType) {
+        if (!StringUtils.hasText(sourceType)) {
+            return SOURCE_APPLE;
+        }
+        String normalized = sourceType.trim().toUpperCase(Locale.ROOT);
+        return (SOURCE_UPLOAD.equals(normalized) || SOURCE_APPLE.equals(normalized)) ? normalized : SOURCE_APPLE;
     }
 
     /**
-     * Normalizes values for case-insensitive dedupe keys.
+     * Builds a key for source + geo + locale matching.
      */
-    private String normalizeLower(String value) {
-        if (!StringUtils.hasText(value)) {
-            return "";
+    private String sourceGeoLocaleKey(String sourceType, String geoCode, String localeCode) {
+        String source = normalizeSourceType(sourceType);
+        String geo = normalizeGeo(geoCode);
+        String locale = normalizeLocale(localeCode);
+        if (geo == null || locale == null) {
+            return null;
         }
-        return value.trim().toLowerCase(Locale.ROOT);
+        return source + "|" + geo + "|" + locale;
     }
 
     /**
@@ -608,6 +713,17 @@ public class AssetRegionLocaleService {
         }
         String normalized = geo.trim().toUpperCase(Locale.ROOT);
         return normalized.length() == 2 ? normalized : null;
+    }
+
+    /**
+     * Maps geo code to country code used in locale format.
+     */
+    private String localeCountryForGeo(String geo) {
+        String normalized = normalizeGeo(geo);
+        if (normalized == null) {
+            return null;
+        }
+        return GEO_TO_LOCALE_COUNTRY.getOrDefault(normalized, normalized);
     }
 
     /**
@@ -654,7 +770,7 @@ public class AssetRegionLocaleService {
             return normalizeLocale(configuredFallback.get(0));
         }
         String language = DEFAULT_LANGUAGE_BY_GEO.getOrDefault(normalizedGeo, "en");
-        return normalizeLocale(language + "_" + normalizedGeo);
+        return normalizeLocale(language + "_" + localeCountryForGeo(normalizedGeo));
     }
 
     /**
@@ -677,6 +793,11 @@ public class AssetRegionLocaleService {
      */
     public record RegionOptionsSnapshot(List<String> geos, Map<String, List<String>> geoToLocales) {}
 
+    /**
+     * Upload or sync observation of one geo/locale pair.
+     */
+    public record RegionLocaleObservation(String geoCode, String localeCode, String displayName, String applePath) {}
+
     private record RawAnchorEntry(String applePath, String displayName) {}
 
     private record ParsedRegionEntry(String geoCode, String localeCode, String displayName, String applePath) {}
@@ -687,15 +808,5 @@ public class AssetRegionLocaleService {
             Instant expiresAt = loadedAt.plus(Duration.ofMinutes(safeTtl));
             return Instant.now().isAfter(expiresAt);
         }
-    }
-
-    @FunctionalInterface
-    private interface ValueReader<T> {
-        T read();
-    }
-
-    @FunctionalInterface
-    private interface ValueWriter<T> {
-        void write(T value);
     }
 }

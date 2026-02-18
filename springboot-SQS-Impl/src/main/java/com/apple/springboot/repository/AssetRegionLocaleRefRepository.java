@@ -5,7 +5,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 @Repository
@@ -17,7 +16,16 @@ public interface AssetRegionLocaleRefRepository extends JpaRepository<AssetRegio
     List<AssetRegionLocaleRef> findByActiveTrueOrderByGeoCodeAscDisplayNameAscApplePathAsc();
 
     /**
-     * Finds one row by its storefront path/display tuple.
+     * Loads active mappings for a given source type.
      */
-    Optional<AssetRegionLocaleRef> findByApplePathAndDisplayName(String applePath, String displayName);
+    List<AssetRegionLocaleRef> findByActiveTrueAndSourceTypeOrderByGeoCodeAscLocaleCodeAscDisplayNameAsc(String sourceType);
+
+    /**
+     * Finds one row by source + geo + locale tuple.
+     */
+    java.util.Optional<AssetRegionLocaleRef> findBySourceTypeAndGeoCodeAndLocaleCode(
+            String sourceType,
+            String geoCode,
+            String localeCode
+    );
 }

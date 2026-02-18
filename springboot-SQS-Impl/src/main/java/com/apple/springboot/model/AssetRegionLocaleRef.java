@@ -34,6 +34,7 @@ import java.util.UUID;
                 @Index(name = "idx_asset_region_locale_ref_geo", columnList = "geo_code"),
                 @Index(name = "idx_asset_region_locale_ref_locale", columnList = "locale_code"),
                 @Index(name = "idx_asset_region_locale_ref_path", columnList = "apple_path"),
+                @Index(name = "idx_asset_region_locale_ref_source_type", columnList = "source_type"),
                 @Index(name = "idx_asset_region_locale_ref_active", columnList = "active")
         }
 )
@@ -56,8 +57,17 @@ public class AssetRegionLocaleRef {
     @Column(name = "apple_path", nullable = false, columnDefinition = "TEXT")
     private String applePath;
 
+    @Column(name = "source_type", nullable = false, columnDefinition = "TEXT")
+    private String sourceType = "APPLE";
+
     @Column(name = "active", nullable = false)
     private Boolean active = true;
+
+    @Column(name = "last_seen_at", nullable = false)
+    private OffsetDateTime lastSeenAt;
+
+    @Column(name = "seen_count", nullable = false)
+    private Long seenCount = 1L;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
@@ -77,6 +87,15 @@ public class AssetRegionLocaleRef {
         if (active == null) {
             active = true;
         }
+        if (sourceType == null) {
+            sourceType = "APPLE";
+        }
+        if (lastSeenAt == null) {
+            lastSeenAt = now;
+        }
+        if (seenCount == null || seenCount < 1) {
+            seenCount = 1L;
+        }
         updatedAt = now;
     }
 
@@ -85,6 +104,12 @@ public class AssetRegionLocaleRef {
      */
     @PreUpdate
     void onUpdate() {
+        if (lastSeenAt == null) {
+            lastSeenAt = OffsetDateTime.now();
+        }
+        if (seenCount == null || seenCount < 1) {
+            seenCount = 1L;
+        }
         updatedAt = OffsetDateTime.now();
     }
 }

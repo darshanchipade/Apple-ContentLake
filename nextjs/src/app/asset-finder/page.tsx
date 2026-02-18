@@ -125,23 +125,24 @@ const normalizeLocaleValue = (locale: string | undefined) => {
 };
 
 const UI_COLORS = {
-  pageBg: "#e6e6e6",
-  panelBg: "#efefef",
-  panelBorder: "#c6c6c6",
-  label: "#3e3e3e",
-  inputBorder: "#9e9e9e",
-  button: "#2f75d6",
-  buttonBorder: "#2a67bb",
-  tileBg: "#efefef",
-  tileBorder: "#c7c7c7",
-  pathText: "#4b4b4b",
-  link: "#1f3f8f",
-  count: "#2f2f2f",
+  pageBg: "#ffffff",
+  panelBg: "#ffffff",
+  panelBorder: "#e2e8f0",
+  label: "#475569",
+  inputBorder: "#e2e8f0",
+  button: "#0071e3",
+  buttonBorder: "#0071e3",
+  tileBg: "#ffffff",
+  tilePreviewBg: "#f8fafc",
+  tileBorder: "#e2e8f0",
+  pathText: "#475569",
+  link: "#1d4ed8",
+  count: "#334155",
 };
 
-const FILTER_PANEL_SHADOW = "inset 0 1px 0 rgba(255, 255, 255, 0.78)";
-const BUTTON_SHADOW = "inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 1px 2px rgba(0, 0, 0, 0.2)";
-const TILE_SHADOW = "0 2px 7px rgba(0, 0, 0, 0.34)";
+const FILTER_PANEL_SHADOW = "0 1px 3px rgba(15, 23, 42, 0.08)";
+const BUTTON_SHADOW = "0 1px 2px rgba(15, 23, 42, 0.18)";
+const TILE_SHADOW = "0 2px 7px rgba(15, 23, 42, 0.16)";
 
 const safeParsePayload = (raw: string): unknown => {
   try {
@@ -162,8 +163,8 @@ function TilePreview({ path, label }: { path?: string; label: string }) {
   const normalized = normalizeAssetPath(path);
   if (!normalized || loadFailed) {
     return (
-      <div className="flex h-[188px] items-center justify-center text-slate-700" style={{ backgroundColor: UI_COLORS.tileBg }}>
-        <PhotoIcon className="size-20" />
+      <div className="flex aspect-square w-full items-center justify-center text-slate-500" style={{ backgroundColor: UI_COLORS.tilePreviewBg }}>
+        <PhotoIcon className="size-16" />
       </div>
     );
   }
@@ -171,8 +172,8 @@ function TilePreview({ path, label }: { path?: string; label: string }) {
     <img
       src={normalized}
       alt={label}
-      className="h-[188px] w-full object-contain p-5"
-      style={{ backgroundColor: UI_COLORS.tileBg }}
+      className="aspect-square w-full object-contain p-6"
+      style={{ backgroundColor: UI_COLORS.tilePreviewBg }}
       loading="lazy"
       onError={() => setLoadFailed(true)}
     />
@@ -191,12 +192,11 @@ export default function AssetFinderPage() {
   const [detailError, setDetailError] = useState<string | null>(null);
   const [showLocaleSpecificAssets, setShowLocaleSpecificAssets] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
-  const filterLabelClass =
-    "mb-1 inline-flex items-center gap-1 text-[10px] font-semibold leading-3 tracking-[0.01em]";
+  const filterLabelClass = "mb-1 inline-flex items-center gap-1 text-xs font-semibold";
   const filterSelectClass =
-    "h-[34px] w-full rounded-[3px] border bg-white px-2 text-[11px] text-[#1f1f1f] shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] focus:outline-none focus:ring-1 focus:ring-[#7fa8e5]";
+    "h-10 w-full rounded-2xl border bg-slate-50 px-3 text-sm text-slate-900 shadow-sm focus:border-slate-900/40 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/10";
   const actionButtonClass =
-    "h-[34px] self-end rounded-[4px] border px-5 text-[11px] font-semibold text-white transition hover:bg-[#2968bf]";
+    "h-10 self-end rounded-full border px-5 text-sm font-semibold text-white transition hover:bg-accent";
 
   const localesForGeo = useMemo(() => {
     return options.geoToLocales?.[filters.geo] ?? [];
@@ -326,14 +326,13 @@ export default function AssetFinderPage() {
   return (
     <PipelineShell currentStep="ingestion" showTracker={false}>
       <main
-        className="mx-auto max-w-[1750px] rounded-[2px] p-3 lg:p-5"
+        className="mx-auto max-w-[1750px] p-3 lg:p-5"
         style={{
-          fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif',
           backgroundColor: UI_COLORS.pageBg,
         }}
       >
         <section
-          className="rounded-[4px] border p-3"
+          className="rounded-2xl border p-4"
           style={{
             backgroundColor: UI_COLORS.panelBg,
             borderColor: UI_COLORS.panelBorder,
@@ -349,7 +348,7 @@ export default function AssetFinderPage() {
                 value={filters.tenant}
                 onChange={(event) => setFilters((prev) => ({ ...prev, tenant: event.target.value }))}
                 className={filterSelectClass}
-                style={{ borderColor: UI_COLORS.inputBorder }}
+                style={{ borderColor: UI_COLORS.inputBorder, borderRadius: "9999px" }}
               >
                 {options.tenants.map((value) => (
                   <option key={value} value={value}>
@@ -366,7 +365,7 @@ export default function AssetFinderPage() {
                 value={filters.environment}
                 onChange={(event) => setFilters((prev) => ({ ...prev, environment: event.target.value }))}
                 className={filterSelectClass}
-                style={{ borderColor: UI_COLORS.inputBorder }}
+                style={{ borderColor: UI_COLORS.inputBorder, borderRadius: "9999px" }}
               >
                 {options.environments.map((value) => (
                   <option key={value} value={value}>
@@ -383,7 +382,7 @@ export default function AssetFinderPage() {
                 value={filters.project}
                 onChange={(event) => setFilters((prev) => ({ ...prev, project: event.target.value }))}
                 className={filterSelectClass}
-                style={{ borderColor: UI_COLORS.inputBorder }}
+                style={{ borderColor: UI_COLORS.inputBorder, borderRadius: "9999px" }}
               >
                 {options.projects.map((value) => (
                   <option key={value} value={value}>
@@ -400,7 +399,7 @@ export default function AssetFinderPage() {
                 value={filters.site}
                 onChange={(event) => setFilters((prev) => ({ ...prev, site: event.target.value }))}
                 className={filterSelectClass}
-                style={{ borderColor: UI_COLORS.inputBorder }}
+                style={{ borderColor: UI_COLORS.inputBorder, borderRadius: "9999px" }}
               >
                 {options.sites.map((value) => (
                   <option key={value} value={value}>
@@ -421,7 +420,7 @@ export default function AssetFinderPage() {
                   setFilters((prev) => ({ ...prev, geo: nextGeo, locale: nextLocale || prev.locale }));
                 }}
                 className={filterSelectClass}
-                style={{ borderColor: UI_COLORS.inputBorder }}
+                style={{ borderColor: UI_COLORS.inputBorder, borderRadius: "9999px" }}
               >
                 {options.geos.map((value) => (
                   <option key={value} value={value}>
@@ -438,7 +437,7 @@ export default function AssetFinderPage() {
                 value={filters.locale}
                 onChange={(event) => setFilters((prev) => ({ ...prev, locale: event.target.value }))}
                 className={filterSelectClass}
-                style={{ borderColor: UI_COLORS.inputBorder }}
+                style={{ borderColor: UI_COLORS.inputBorder, borderRadius: "9999px" }}
               >
                 {(localesForGeo.length ? localesForGeo : [filters.locale]).map((value) => (
                   <option key={value} value={value}>
@@ -488,10 +487,10 @@ export default function AssetFinderPage() {
 
         <section className="mt-3">
           <div className="mb-3 flex items-center justify-between gap-3">
-            <p className="text-xs font-medium" style={{ color: UI_COLORS.count }}>
+            <p className="text-sm font-medium" style={{ color: UI_COLORS.count }}>
               Count : {visibleItems.length}/{results?.count ?? visibleItems.length}
             </p>
-            <label className="inline-flex items-center gap-2 text-xs" style={{ color: UI_COLORS.count }}>
+            <label className="inline-flex items-center gap-2 text-sm" style={{ color: UI_COLORS.count }}>
               <input
                 type="checkbox"
                 checked={showLocaleSpecificAssets}
@@ -513,7 +512,7 @@ export default function AssetFinderPage() {
             {visibleItems.map((tile) => (
               <article
                 key={tile.id}
-                className="rounded-[2px] border"
+                className="overflow-hidden rounded-2xl border bg-white"
                 style={{
                   borderColor: UI_COLORS.tileBorder,
                   backgroundColor: UI_COLORS.tileBg,
@@ -528,7 +527,7 @@ export default function AssetFinderPage() {
                 </div>
                 <div className="border-t px-3 py-2" style={{ borderColor: UI_COLORS.tileBorder }}>
                   <div className="flex items-end justify-between gap-2">
-                    <p className="break-all text-[10px] leading-[1.35]" style={{ color: UI_COLORS.pathText }}>
+                    <p className="max-h-10 overflow-hidden break-all text-[10px] leading-[1.35]" style={{ color: UI_COLORS.pathText }}>
                       Interactive Path:{" "}
                       {normalizeAssetPath(tile.interactivePath) ? (
                         <a

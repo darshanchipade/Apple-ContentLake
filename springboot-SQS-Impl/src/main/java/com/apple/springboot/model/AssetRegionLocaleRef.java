@@ -58,7 +58,7 @@ public class AssetRegionLocaleRef {
     private String applePath;
 
     @Column(name = "source_type", nullable = false, columnDefinition = "TEXT")
-    private String sourceType = "APPLE";
+    private String sourceType = "UPLOAD";
 
     @Column(name = "active", nullable = false)
     private Boolean active = true;
@@ -88,7 +88,7 @@ public class AssetRegionLocaleRef {
             active = true;
         }
         if (sourceType == null) {
-            sourceType = "APPLE";
+            sourceType = "UPLOAD";
         }
         if (lastSeenAt == null) {
             lastSeenAt = now;

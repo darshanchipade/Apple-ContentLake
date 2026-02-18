@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS asset_region_locale_ref (
     locale_code TEXT,
     display_name TEXT NOT NULL,
     apple_path TEXT NOT NULL,
-    source_type TEXT NOT NULL DEFAULT 'APPLE',
+    source_type TEXT NOT NULL DEFAULT 'UPLOAD',
     active BOOLEAN NOT NULL DEFAULT TRUE,
     last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     seen_count BIGINT NOT NULL DEFAULT 1,
@@ -18,7 +18,15 @@ CREATE TABLE IF NOT EXISTS asset_region_locale_ref (
 );
 
 ALTER TABLE IF EXISTS asset_region_locale_ref
-    ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'APPLE';
+    ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'UPLOAD';
+
+ALTER TABLE IF EXISTS asset_region_locale_ref
+    ALTER COLUMN source_type SET DEFAULT 'UPLOAD';
+
+-- Historical rows from the old Apple-sync mode are normalized into UPLOAD mode.
+UPDATE asset_region_locale_ref
+SET source_type = 'UPLOAD'
+WHERE source_type IS NULL OR source_type = 'APPLE';
 
 ALTER TABLE IF EXISTS asset_region_locale_ref
     ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW();

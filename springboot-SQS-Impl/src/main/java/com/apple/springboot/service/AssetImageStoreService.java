@@ -68,16 +68,11 @@ public class AssetImageStoreService {
     private static final List<String> ENVIRONMENTS = List.of("stage", "prod", "qa");
     private static final List<String> DEFAULT_PROJECTS = List.of("rome");
     private static final List<String> DEFAULT_SITES = List.of("ipad", "mac");
-    private static final List<String> DEFAULT_GEOS = List.of("WW", "JP", "KR");
-    private static final Map<String, List<String>> GEO_TO_LOCALE = Map.of(
-            "WW", List.of("en_US"),
-            "JP", List.of("ja_JP"),
-            "KR", List.of("ko_KR")
-    );
 
     private final AssetMetadataCatalogRepository catalogRepository;
     private final AssetMetadataOccurrenceRepository occurrenceRepository;
     private final CleansedDataStoreRepository cleansedDataStoreRepository;
+    private final AssetRegionLocaleService assetRegionLocaleService;
     private final ObjectMapper objectMapper;
     private final JdbcTemplate jdbcTemplate;
 
@@ -111,11 +106,13 @@ public class AssetImageStoreService {
     public AssetImageStoreService(AssetMetadataCatalogRepository catalogRepository,
                                   AssetMetadataOccurrenceRepository occurrenceRepository,
                                   CleansedDataStoreRepository cleansedDataStoreRepository,
+                                  AssetRegionLocaleService assetRegionLocaleService,
                                   ObjectMapper objectMapper,
                                   JdbcTemplate jdbcTemplate) {
         this.catalogRepository = catalogRepository;
         this.occurrenceRepository = occurrenceRepository;
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
+        this.assetRegionLocaleService = assetRegionLocaleService;
         this.objectMapper = objectMapper;
         this.jdbcTemplate = jdbcTemplate;
     }
@@ -220,8 +217,10 @@ public class AssetImageStoreService {
         response.setEnvironments(ENVIRONMENTS);
         response.setProjects(new ArrayList<>(projects));
         response.setSites(new ArrayList<>(sites));
-        response.setGeos(DEFAULT_GEOS);
-        response.setGeoToLocales(GEO_TO_LOCALE);
+        AssetRegionLocaleService.RegionOptionsSnapshot regionOptions =
+                assetRegionLocaleService.getRegionOptionsSnapshot();
+        response.setGeos(regionOptions.geos());
+        response.setGeoToLocales(regionOptions.geoToLocales());
         return response;
     }
 
@@ -894,14 +893,7 @@ public class AssetImageStoreService {
      * Maps geo values into default locale values.
      */
     private Optional<String> mapGeoToLocale(String geo) {
-        if (geo == null) {
-            return Optional.empty();
-        }
-        List<String> locales = GEO_TO_LOCALE.get(geo.toUpperCase(Locale.ROOT));
-        if (locales == null || locales.isEmpty()) {
-            return Optional.empty();
-        }
-        return Optional.of(locales.get(0));
+        return assetRegionLocaleService.getDefaultLocaleForGeo(geo);
     }
 
     /**

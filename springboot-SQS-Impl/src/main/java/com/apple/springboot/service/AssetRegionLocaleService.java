@@ -60,6 +60,7 @@ public class AssetRegionLocaleService {
     private static final Map<String, String> DEFAULT_LANGUAGE_BY_GEO = Map.ofEntries(
             Map.entry("WW", "en"),
             Map.entry("LA", "es"),
+            Map.entry("CA", "en"),
             Map.entry("JP", "ja"),
             Map.entry("KR", "ko"),
             Map.entry("TW", "zh"),

@@ -4,9 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
 import {
   ArrowPathIcon,
-  CheckIcon,
   InformationCircleIcon,
-  LinkIcon,
   PhotoIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
@@ -126,6 +124,25 @@ const normalizeLocaleValue = (locale: string | undefined) => {
   return normalized;
 };
 
+const UI_COLORS = {
+  pageBg: "#e6e6e6",
+  panelBg: "#efefef",
+  panelBorder: "#c6c6c6",
+  label: "#3e3e3e",
+  inputBorder: "#9e9e9e",
+  button: "#2f75d6",
+  buttonBorder: "#2a67bb",
+  tileBg: "#efefef",
+  tileBorder: "#c7c7c7",
+  pathText: "#4b4b4b",
+  link: "#1f3f8f",
+  count: "#2f2f2f",
+};
+
+const FILTER_PANEL_SHADOW = "inset 0 1px 0 rgba(255, 255, 255, 0.78)";
+const BUTTON_SHADOW = "inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 1px 2px rgba(0, 0, 0, 0.2)";
+const TILE_SHADOW = "0 2px 7px rgba(0, 0, 0, 0.34)";
+
 const safeParsePayload = (raw: string): unknown => {
   try {
     return JSON.parse(raw);
@@ -145,7 +162,7 @@ function TilePreview({ path, label }: { path?: string; label: string }) {
   const normalized = normalizeAssetPath(path);
   if (!normalized || loadFailed) {
     return (
-      <div className="flex h-44 items-center justify-center bg-[#ededed] text-slate-700">
+      <div className="flex h-[188px] items-center justify-center text-slate-700" style={{ backgroundColor: UI_COLORS.tileBg }}>
         <PhotoIcon className="size-20" />
       </div>
     );
@@ -154,7 +171,8 @@ function TilePreview({ path, label }: { path?: string; label: string }) {
     <img
       src={normalized}
       alt={label}
-      className="h-44 w-full object-contain bg-[#ededed] p-5"
+      className="h-[188px] w-full object-contain p-5"
+      style={{ backgroundColor: UI_COLORS.tileBg }}
       loading="lazy"
       onError={() => setLoadFailed(true)}
     />
@@ -173,6 +191,12 @@ export default function AssetFinderPage() {
   const [detailError, setDetailError] = useState<string | null>(null);
   const [showLocaleSpecificAssets, setShowLocaleSpecificAssets] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
+  const filterLabelClass =
+    "mb-1 inline-flex items-center gap-1 text-[10px] font-semibold leading-3 tracking-[0.01em]";
+  const filterSelectClass =
+    "h-[34px] w-full rounded-[3px] border bg-white px-2 text-[11px] text-[#1f1f1f] shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] focus:outline-none focus:ring-1 focus:ring-[#7fa8e5]";
+  const actionButtonClass =
+    "h-[34px] self-end rounded-[4px] border px-5 text-[11px] font-semibold text-white transition hover:bg-[#2968bf]";
 
   const localesForGeo = useMemo(() => {
     return options.geoToLocales?.[filters.geo] ?? [];
@@ -301,17 +325,31 @@ export default function AssetFinderPage() {
 
   return (
     <PipelineShell currentStep="ingestion" showTracker={false}>
-      <main className="mx-auto max-w-[1750px] p-3 lg:p-5">
-        <section className="rounded-md border border-slate-300 bg-[#f3f3f3] p-3">
-          <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-[repeat(6,minmax(0,1fr))_auto_auto_auto]">
+      <main
+        className="mx-auto max-w-[1750px] rounded-[2px] p-3 lg:p-5"
+        style={{
+          fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif',
+          backgroundColor: UI_COLORS.pageBg,
+        }}
+      >
+        <section
+          className="rounded-[4px] border p-3"
+          style={{
+            backgroundColor: UI_COLORS.panelBg,
+            borderColor: UI_COLORS.panelBorder,
+            boxShadow: FILTER_PANEL_SHADOW,
+          }}
+        >
+          <div className="grid gap-2.5 md:grid-cols-3 xl:grid-cols-[repeat(6,minmax(0,1fr))_auto_auto_auto]">
             <label className="block">
-              <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700">
-                Tenant <InformationCircleIcon className="size-3 text-slate-400" />
+              <span className={filterLabelClass} style={{ color: UI_COLORS.label }}>
+                Tenant <InformationCircleIcon className="size-3" style={{ color: "#858585" }} />
               </span>
               <select
                 value={filters.tenant}
                 onChange={(event) => setFilters((prev) => ({ ...prev, tenant: event.target.value }))}
-                className="h-9 w-full rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none"
+                className={filterSelectClass}
+                style={{ borderColor: UI_COLORS.inputBorder }}
               >
                 {options.tenants.map((value) => (
                   <option key={value} value={value}>
@@ -321,13 +359,14 @@ export default function AssetFinderPage() {
               </select>
             </label>
             <label className="block">
-              <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700">
-                Environment <InformationCircleIcon className="size-3 text-slate-400" />
+              <span className={filterLabelClass} style={{ color: UI_COLORS.label }}>
+                Environment <InformationCircleIcon className="size-3" style={{ color: "#858585" }} />
               </span>
               <select
                 value={filters.environment}
                 onChange={(event) => setFilters((prev) => ({ ...prev, environment: event.target.value }))}
-                className="h-9 w-full rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none"
+                className={filterSelectClass}
+                style={{ borderColor: UI_COLORS.inputBorder }}
               >
                 {options.environments.map((value) => (
                   <option key={value} value={value}>
@@ -337,13 +376,14 @@ export default function AssetFinderPage() {
               </select>
             </label>
             <label className="block">
-              <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700">
-                Project <InformationCircleIcon className="size-3 text-slate-400" />
+              <span className={filterLabelClass} style={{ color: UI_COLORS.label }}>
+                Project <InformationCircleIcon className="size-3" style={{ color: "#858585" }} />
               </span>
               <select
                 value={filters.project}
                 onChange={(event) => setFilters((prev) => ({ ...prev, project: event.target.value }))}
-                className="h-9 w-full rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none"
+                className={filterSelectClass}
+                style={{ borderColor: UI_COLORS.inputBorder }}
               >
                 {options.projects.map((value) => (
                   <option key={value} value={value}>
@@ -353,13 +393,14 @@ export default function AssetFinderPage() {
               </select>
             </label>
             <label className="block">
-              <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700">
-                Site / Page <InformationCircleIcon className="size-3 text-slate-400" />
+              <span className={filterLabelClass} style={{ color: UI_COLORS.label }}>
+                Site / Page <InformationCircleIcon className="size-3" style={{ color: "#858585" }} />
               </span>
               <select
                 value={filters.site}
                 onChange={(event) => setFilters((prev) => ({ ...prev, site: event.target.value }))}
-                className="h-9 w-full rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none"
+                className={filterSelectClass}
+                style={{ borderColor: UI_COLORS.inputBorder }}
               >
                 {options.sites.map((value) => (
                   <option key={value} value={value}>
@@ -369,8 +410,8 @@ export default function AssetFinderPage() {
               </select>
             </label>
             <label className="block">
-              <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700">
-                Geo / Region <InformationCircleIcon className="size-3 text-slate-400" />
+              <span className={filterLabelClass} style={{ color: UI_COLORS.label }}>
+                Geo / Region <InformationCircleIcon className="size-3" style={{ color: "#858585" }} />
               </span>
               <select
                 value={filters.geo}
@@ -379,7 +420,8 @@ export default function AssetFinderPage() {
                   const nextLocale = options.geoToLocales[nextGeo]?.[0] ?? "";
                   setFilters((prev) => ({ ...prev, geo: nextGeo, locale: nextLocale || prev.locale }));
                 }}
-                className="h-9 w-full rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none"
+                className={filterSelectClass}
+                style={{ borderColor: UI_COLORS.inputBorder }}
               >
                 {options.geos.map((value) => (
                   <option key={value} value={value}>
@@ -389,13 +431,14 @@ export default function AssetFinderPage() {
               </select>
             </label>
             <label className="block">
-              <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700">
-                Locale <InformationCircleIcon className="size-3 text-slate-400" />
+              <span className={filterLabelClass} style={{ color: UI_COLORS.label }}>
+                Locale <InformationCircleIcon className="size-3" style={{ color: "#858585" }} />
               </span>
               <select
                 value={filters.locale}
                 onChange={(event) => setFilters((prev) => ({ ...prev, locale: event.target.value }))}
-                className="h-9 w-full rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none"
+                className={filterSelectClass}
+                style={{ borderColor: UI_COLORS.inputBorder }}
               >
                 {(localesForGeo.length ? localesForGeo : [filters.locale]).map((value) => (
                   <option key={value} value={value}>
@@ -410,45 +453,33 @@ export default function AssetFinderPage() {
               onClick={runFilter}
               disabled={isFiltering || loadingOptions}
               className={clsx(
-                "h-9 self-end rounded bg-[#2f75d6] px-5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#2867be]",
+                actionButtonClass,
                 (isFiltering || loadingOptions) && "cursor-wait opacity-70",
               )}
+              style={{ backgroundColor: UI_COLORS.button, borderColor: UI_COLORS.buttonBorder, boxShadow: BUTTON_SHADOW }}
             >
               {isFiltering ? "Filtering..." : "Filter"}
             </button>
             <button
               type="button"
               onClick={resetFilters}
-              className="h-9 self-end rounded bg-[#2f75d6] px-5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#2867be]"
+              className={actionButtonClass}
+              style={{ backgroundColor: UI_COLORS.button, borderColor: UI_COLORS.buttonBorder, boxShadow: BUTTON_SHADOW }}
             >
               Reset
             </button>
             <button
               type="button"
               onClick={shareUrl}
-              className={clsx(
-                "inline-flex h-9 self-end items-center justify-center gap-1 rounded px-4 text-xs font-semibold shadow-sm transition",
-                shareCopied
-                  ? "bg-emerald-600 text-white hover:bg-emerald-700"
-                  : "bg-[#2f75d6] text-white hover:bg-[#2867be]",
-              )}
+              className={actionButtonClass}
+              style={{ backgroundColor: UI_COLORS.button, borderColor: UI_COLORS.buttonBorder, boxShadow: BUTTON_SHADOW }}
             >
-              {shareCopied ? (
-                <>
-                  <CheckIcon className="size-4" />
-                  Copied
-                </>
-              ) : (
-                <>
-                  <LinkIcon className="size-4" />
-                  Share URL
-                </>
-              )}
+              {shareCopied ? "Copied" : "Share URL"}
             </button>
           </div>
 
           {loadingOptions && (
-            <div className="mt-2 inline-flex items-center gap-2 text-xs text-slate-500">
+            <div className="mt-2 inline-flex items-center gap-2 text-[11px]" style={{ color: "#666666" }}>
               <ArrowPathIcon className="size-3.5 animate-spin" />
               Loading options...
             </div>
@@ -457,15 +488,16 @@ export default function AssetFinderPage() {
 
         <section className="mt-3">
           <div className="mb-3 flex items-center justify-between gap-3">
-            <p className="text-xs font-medium text-slate-700">
+            <p className="text-xs font-medium" style={{ color: UI_COLORS.count }}>
               Count : {visibleItems.length}/{results?.count ?? visibleItems.length}
             </p>
-            <label className="inline-flex items-center gap-2 text-xs text-slate-700">
+            <label className="inline-flex items-center gap-2 text-xs" style={{ color: UI_COLORS.count }}>
               <input
                 type="checkbox"
                 checked={showLocaleSpecificAssets}
                 onChange={(event) => setShowLocaleSpecificAssets(event.target.checked)}
-                className="h-3.5 w-3.5 rounded border-slate-300 text-[#2f75d6] focus:ring-[#2f75d6]"
+                className="h-3.5 w-3.5 rounded border text-[#2f75d6] focus:ring-[#2f75d6]"
+                style={{ borderColor: "#999999" }}
               />
               Show Locale Specific Assets
             </label>
@@ -481,20 +513,28 @@ export default function AssetFinderPage() {
             {visibleItems.map((tile) => (
               <article
                 key={tile.id}
-                className="rounded-sm border border-slate-300 bg-[#f0f0f0] shadow-[0_2px_6px_rgba(0,0,0,0.18)]"
+                className="rounded-[2px] border"
+                style={{
+                  borderColor: UI_COLORS.tileBorder,
+                  backgroundColor: UI_COLORS.tileBg,
+                  boxShadow: TILE_SHADOW,
+                }}
               >
-                <TilePreview
-                  path={tile.previewUri ?? tile.interactivePath}
-                  label={tile.altText ?? tile.assetKey ?? "Asset preview"}
-                />
-                <div className="border-t border-slate-300 px-3 py-2">
+                <div className="px-3 pt-3">
+                  <TilePreview
+                    path={tile.previewUri ?? tile.interactivePath}
+                    label={tile.altText ?? tile.assetKey ?? "Asset preview"}
+                  />
+                </div>
+                <div className="border-t px-3 py-2" style={{ borderColor: UI_COLORS.tileBorder }}>
                   <div className="flex items-end justify-between gap-2">
-                    <p className="text-[10px] leading-4 text-slate-600 break-all">
+                    <p className="break-all text-[10px] leading-[1.35]" style={{ color: UI_COLORS.pathText }}>
                       Interactive Path:{" "}
                       {normalizeAssetPath(tile.interactivePath) ? (
                         <a
                           href={normalizeAssetPath(tile.interactivePath)}
-                          className="text-[#1f4fa8] underline"
+                          className="underline"
+                          style={{ color: UI_COLORS.link }}
                           target="_blank"
                           rel="noreferrer"
                         >
@@ -507,7 +547,8 @@ export default function AssetFinderPage() {
                     <button
                       type="button"
                       onClick={() => openDetail(tile.id)}
-                      className="shrink-0 rounded-full p-0.5 text-slate-500 transition hover:bg-slate-300/50 hover:text-slate-900"
+                      className="shrink-0 rounded-full p-0.5 transition hover:bg-slate-300/50"
+                      style={{ color: "#787878" }}
                       title="View metadata"
                     >
                       <InformationCircleIcon className="size-4" />

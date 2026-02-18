@@ -25,11 +25,15 @@ public class AssetImageStoreService {
     private static final Pattern LOCALE_PATTERN = Pattern.compile("(?<=/)([a-z]{2})[-_]([A-Z]{2})(?=/|$)");
 
     private final AssetImageStoreRepository assetImageStoreRepository;
+    private final AppleRegionService appleRegionService;
     private final ObjectMapper objectMapper;
 
     @Autowired
-    public AssetImageStoreService(AssetImageStoreRepository assetImageStoreRepository, ObjectMapper objectMapper) {
+    public AssetImageStoreService(AssetImageStoreRepository assetImageStoreRepository,
+                                   AppleRegionService appleRegionService,
+                                   ObjectMapper objectMapper) {
         this.assetImageStoreRepository = assetImageStoreRepository;
+        this.appleRegionService = appleRegionService;
         this.objectMapper = objectMapper;
     }
 
@@ -143,12 +147,20 @@ public class AssetImageStoreService {
         if (metadata.getEnvironment() == null && segments.length >= 4) {
             metadata.setEnvironment(segments[3]);
         }
-        if (metadata.getLocale() == null && segments.length >= 5) {
-            metadata.setLocale(segments[4]);
-            if (metadata.getGeo() == null) {
-                Matcher matcher = LOCALE_PATTERN.matcher("/" + segments[4] + "/");
-                if (matcher.find()) {
-                    metadata.setGeo(matcher.group(2));
+        if (segments.length >= 5) {
+            String localeSegment = segments[4];
+            AppleRegionService.RegionInfo regionInfo = appleRegionService.getRegionInfo(localeSegment);
+
+            if (regionInfo != null) {
+                if (metadata.getLocale() == null) metadata.setLocale(regionInfo.locale);
+                if (metadata.getGeo() == null) metadata.setGeo(regionInfo.geo);
+            } else if (metadata.getLocale() == null) {
+                metadata.setLocale(localeSegment);
+                if (metadata.getGeo() == null) {
+                    Matcher matcher = LOCALE_PATTERN.matcher("/" + localeSegment + "/");
+                    if (matcher.find()) {
+                        metadata.setGeo(matcher.group(2));
+                    }
                 }
             }
         }

@@ -30,6 +30,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -305,7 +306,7 @@ public class AssetImageStoreService {
     /**
      * Searches stored image metadata using Asset Finder filters.
      */
-    @Transactional(readOnly = true)
+    @Transactional
     public AssetFinderSearchResponse search(AssetFinderFilterRequest request) {
         AssetFinderFilterRequest safeRequest = request != null ? request : new AssetFinderFilterRequest();
         int page = Math.max(0, Optional.ofNullable(safeRequest.getPage()).orElse(0));
@@ -1373,8 +1374,15 @@ public class AssetImageStoreService {
             occurrencePresent = false;
         }
         boolean present = catalogPresent && occurrencePresent;
-        if (present && ensureOccurrenceFilterColumnsAreText()) {
-            tablesPresent = true;
+        if (present) {
+            boolean canNormalizeNow = !TransactionSynchronizationManager.isCurrentTransactionReadOnly();
+            if (canNormalizeNow) {
+                if (ensureOccurrenceFilterColumnsAreText()) {
+                    tablesPresent = true;
+                }
+            } else if (Boolean.TRUE.equals(occurrenceFilterColumnsNormalized)) {
+                tablesPresent = true;
+            }
         }
         return Boolean.TRUE.equals(tablesPresent);
     }

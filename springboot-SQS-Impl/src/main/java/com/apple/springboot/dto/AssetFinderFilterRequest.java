@@ -16,5 +16,5 @@ public class AssetFinderFilterRequest {
     private String geo;
     private String locale;
     private Integer page = 0;
-    private Integer size = 58;
+    private Integer size = 200;
 }

@@ -304,7 +304,7 @@ public class AssetImageStoreService {
     public AssetFinderSearchResponse search(AssetFinderFilterRequest request) {
         AssetFinderFilterRequest safeRequest = request != null ? request : new AssetFinderFilterRequest();
         int page = Math.max(0, Optional.ofNullable(safeRequest.getPage()).orElse(0));
-        int size = Math.max(1, Math.min(200, Optional.ofNullable(safeRequest.getSize()).orElse(58)));
+        int size = Math.max(1, Math.min(200, Optional.ofNullable(safeRequest.getSize()).orElse(200)));
 
         if (!areTablesPresent()) {
             AssetFinderSearchResponse empty = new AssetFinderSearchResponse();

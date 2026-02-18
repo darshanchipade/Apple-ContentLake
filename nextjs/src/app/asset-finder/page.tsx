@@ -143,6 +143,7 @@ const UI_COLORS = {
 const FILTER_PANEL_SHADOW = "0 1px 3px rgba(15, 23, 42, 0.08)";
 const BUTTON_SHADOW = "0 1px 2px rgba(15, 23, 42, 0.18)";
 const TILE_SHADOW = "0 2px 7px rgba(15, 23, 42, 0.16)";
+const SEARCH_PAGE_SIZE = 200;
 
 const FILTER_HELP_TEXT = {
   tenant: "Content source tenant (for example: applecom-cms).",
@@ -284,14 +285,14 @@ export default function AssetFinderPage() {
         body: JSON.stringify({
           ...filters,
           page: 0,
-          size: 120,
+          size: SEARCH_PAGE_SIZE,
         }),
       });
       const payload = await parseProxyPayload<AssetFinderSearchResponse>(response);
       if (!response.ok) {
         throw new Error("Asset Finder query failed.");
       }
-      setResults(payload ?? { count: 0, page: 0, size: 120, totalPages: 0, items: [] });
+      setResults(payload ?? { count: 0, page: 0, size: SEARCH_PAGE_SIZE, totalPages: 0, items: [] });
     } catch (filterError) {
       setResults(null);
       setError(filterError instanceof Error ? filterError.message : "Asset Finder query failed.");

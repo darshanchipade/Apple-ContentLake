@@ -71,8 +71,6 @@ type AssetFinderDetail = {
   metadata?: Record<string, unknown>;
 };
 
-const ALL_VALUE = "";
-
 const DEFAULT_OPTIONS: AssetFinderOptions = {
   tenants: ["applecom-cms"],
   environments: ["stage", "prod", "qa"],
@@ -90,10 +88,10 @@ const buildInitialFilters = (options: AssetFinderOptions): AssetFinderFilters =>
   const geo = options.geos[0] ?? "WW";
   const locale = options.geoToLocales?.[geo]?.[0] ?? "en_US";
   return {
-    tenant: ALL_VALUE,
-    environment: ALL_VALUE,
-    project: ALL_VALUE,
-    site: ALL_VALUE,
+    tenant: options.tenants[0] ?? "applecom-cms",
+    environment: options.environments[0] ?? "stage",
+    project: options.projects[0] ?? "rome",
+    site: options.sites[0] ?? "ipad",
     geo,
     locale,
   };
@@ -374,7 +372,6 @@ export default function AssetFinderPage() {
                 className={filterSelectClass}
                 style={{ borderColor: UI_COLORS.inputBorder, borderRadius: "9999px" }}
               >
-                <option value={ALL_VALUE}>All</option>
                 {options.tenants.map((value) => (
                   <option key={value} value={value}>
                     {value}
@@ -392,7 +389,6 @@ export default function AssetFinderPage() {
                 className={filterSelectClass}
                 style={{ borderColor: UI_COLORS.inputBorder, borderRadius: "9999px" }}
               >
-                <option value={ALL_VALUE}>All</option>
                 {options.environments.map((value) => (
                   <option key={value} value={value}>
                     {value}
@@ -410,7 +406,6 @@ export default function AssetFinderPage() {
                 className={filterSelectClass}
                 style={{ borderColor: UI_COLORS.inputBorder, borderRadius: "9999px" }}
               >
-                <option value={ALL_VALUE}>All</option>
                 {options.projects.map((value) => (
                   <option key={value} value={value}>
                     {value}
@@ -428,7 +423,6 @@ export default function AssetFinderPage() {
                 className={filterSelectClass}
                 style={{ borderColor: UI_COLORS.inputBorder, borderRadius: "9999px" }}
               >
-                <option value={ALL_VALUE}>All</option>
                 {options.sites.map((value) => (
                   <option key={value} value={value}>
                     {value}

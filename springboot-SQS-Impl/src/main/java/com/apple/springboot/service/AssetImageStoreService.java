@@ -502,7 +502,13 @@ public class AssetImageStoreService {
         Map<String, Object> canonicalCatalogMetadata = new LinkedHashMap<>(metadataMap);
         canonicalCatalogMetadata.remove("_path");
 
-        ResolvedMetadata resolved = resolveMetadata(requestMetadata, assetNodePath, publicInteractivePath);
+        ResolvedMetadata resolved = resolveMetadata(
+                requestMetadata,
+                assetNodePath,
+                publicInteractivePath,
+                sectionContext.path(),
+                rawDataStore.getSourceUri()
+        );
         if (resolved.locale() == null) {
             resolved = new ResolvedMetadata(
                     resolved.tenant(), resolved.environment(), resolved.project(), resolved.site(),
@@ -874,12 +880,16 @@ public class AssetImageStoreService {
      */
     private ResolvedMetadata resolveMetadata(UploadRequestMetadata requestMetadata,
                                              String assetNodePath,
-                                             String interactivePath) {
+                                             String interactivePath,
+                                             String sectionPath,
+                                             String sourceUri) {
         String requestLocale = requestMetadata != null ? normalizeLocale(requestMetadata.locale()) : null;
         String locale = firstNonBlank(
                 requestLocale,
+                inferLocale(sectionPath),
                 inferLocale(assetNodePath),
                 inferLocale(interactivePath),
+                inferLocale(sourceUri),
                 normalizeLocale(defaultLocale)
         );
         String geo = firstNonBlank(
@@ -889,13 +899,17 @@ public class AssetImageStoreService {
         );
         String site = firstNonBlank(
                 requestMetadata != null ? normalizeText(requestMetadata.site()) : null,
-                inferSite(interactivePath),
+                inferSite(sectionPath),
                 inferSite(assetNodePath),
+                inferSite(sourceUri),
+                inferSite(interactivePath),
                 normalizeText(defaultSite)
         );
         String tenant = firstNonBlank(
                 requestMetadata != null ? normalizeText(requestMetadata.tenant()) : null,
+                inferTenant(sectionPath),
                 inferTenant(assetNodePath),
+                inferTenant(sourceUri),
                 normalizeText(defaultTenant)
         );
         String environment = firstNonBlank(

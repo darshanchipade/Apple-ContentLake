@@ -47,7 +47,12 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
                     where (:tenant is null or lower(convert_from(cast(o.tenant as bytea), 'UTF8')) = lower(cast(:tenant as text)))
                       and (:environment is null or lower(convert_from(cast(o.environment as bytea), 'UTF8')) = lower(cast(:environment as text)))
                       and (:project is null or lower(convert_from(cast(o.project as bytea), 'UTF8')) = lower(cast(:project as text)))
-                      and (:site is null or lower(convert_from(cast(o.site as bytea), 'UTF8')) = lower(cast(:site as text)))
+                      and (
+                            :site is null
+                            or lower(convert_from(cast(o.site as bytea), 'UTF8')) = lower(cast(:site as text))
+                            or lower(convert_from(cast(o.section_path as bytea), 'UTF8')) like ('%/' || lower(cast(:site as text)) || '/%')
+                            or lower(convert_from(cast(o.source_uri as bytea), 'UTF8')) like ('%/' || lower(cast(:site as text)) || '/%')
+                          )
                       and (:geo is null or lower(convert_from(cast(o.geo as bytea), 'UTF8')) = lower(cast(:geo as text)))
                       and (:locale is null or lower(convert_from(cast(o.locale as bytea), 'UTF8')) = lower(cast(:locale as text)))
                     order by o.created_at desc
@@ -58,7 +63,12 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
                     where (:tenant is null or lower(convert_from(cast(o.tenant as bytea), 'UTF8')) = lower(cast(:tenant as text)))
                       and (:environment is null or lower(convert_from(cast(o.environment as bytea), 'UTF8')) = lower(cast(:environment as text)))
                       and (:project is null or lower(convert_from(cast(o.project as bytea), 'UTF8')) = lower(cast(:project as text)))
-                      and (:site is null or lower(convert_from(cast(o.site as bytea), 'UTF8')) = lower(cast(:site as text)))
+                      and (
+                            :site is null
+                            or lower(convert_from(cast(o.site as bytea), 'UTF8')) = lower(cast(:site as text))
+                            or lower(convert_from(cast(o.section_path as bytea), 'UTF8')) like ('%/' || lower(cast(:site as text)) || '/%')
+                            or lower(convert_from(cast(o.source_uri as bytea), 'UTF8')) like ('%/' || lower(cast(:site as text)) || '/%')
+                          )
                       and (:geo is null or lower(convert_from(cast(o.geo as bytea), 'UTF8')) = lower(cast(:geo as text)))
                       and (:locale is null or lower(convert_from(cast(o.locale as bytea), 'UTF8')) = lower(cast(:locale as text)))
                     """,

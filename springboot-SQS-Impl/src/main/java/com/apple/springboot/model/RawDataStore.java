@@ -31,18 +31,37 @@ public class RawDataStore {
     @Column(name = "source_metadata", columnDefinition = "jsonb")
     private String sourceMetadata; // Store as JSON string
 
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "source_request_metadata", columnDefinition = "jsonb")
+    private String sourceRequestMetadata; // Optional upload request metadata
+
     @Column(name = "received_at", nullable = false, updatable = false)
     private OffsetDateTime receivedAt;
 
     @Column(name = "status", nullable = false, columnDefinition = "TEXT")
     private String status;
 
+    /**
+     * -- GETTER --
+     *  Returns the payload content hash.
+     */
+    @Getter
     @Column(name = "content_hash", columnDefinition = "TEXT")
     private String contentHash;
 
+    /**
+     * -- GETTER --
+     *  Returns the content type of the stored payload.
+     */
+    @Getter
     @Column(name = "source_content_type", columnDefinition = "TEXT")
     private String sourceContentType;
 
+    /**
+     * -- GETTER --
+     *  Returns the version number for this source URI.
+     */
+    @Getter
     @Column(name = "version")
     private Integer version = 1;
 
@@ -80,6 +99,11 @@ public class RawDataStore {
     public void setSourceMetadata(String sourceMetadata) { this.sourceMetadata = sourceMetadata; }
 
     /**
+     * Sets optional metadata supplied by the upload request.
+     */
+    public void setSourceRequestMetadata(String sourceRequestMetadata) { this.sourceRequestMetadata = sourceRequestMetadata; }
+
+    /**
      * Sets the timestamp when the payload was received.
      */
     public void setReceivedAt(OffsetDateTime receivedAt) { this.receivedAt = receivedAt; }
@@ -90,32 +114,15 @@ public class RawDataStore {
     public void setStatus(String status) { this.status = status; }
 
     /**
-     * Returns the payload content hash.
-     */
-    public String getContentHash() { return contentHash; }
-
-    /**
      * Sets the payload content hash.
      */
     public void setContentHash(String contentHash) { this.contentHash = contentHash; }
-
-    /**
-     * Returns the content type of the stored payload.
-     */
-    public String getSourceContentType() { return sourceContentType; }
 
     /**
      * Sets the content type of the stored payload.
      */
     public void setSourceContentType(String sourceContentType) { this.sourceContentType = sourceContentType; }
 
-
-    /**
-     * Returns the version number for this source URI.
-     */
-    public Integer getVersion() {
-        return version;
-    }
 
     /**
      * Updates the version number for this source URI.

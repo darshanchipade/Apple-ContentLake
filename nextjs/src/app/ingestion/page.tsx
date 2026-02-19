@@ -448,7 +448,11 @@ export default function IngestionPage() {
                 backendMessage: details.message ?? item.backendMessage,
                 sourceIdentifier,
                 sourceType,
-                locale: filenameLocale ?? details.locale ?? payloadLocale ?? item.locale,
+                locale:
+                  filenameLocale ??
+                  details.locale ??
+                  payloadLocale ??
+                  item.locale,
                 pageId: payloadPageId ?? details.pageId ?? item.pageId,
               }
             : item,
@@ -473,7 +477,10 @@ export default function IngestionPage() {
         uploadedAt: Date.now(),
         sourceIdentifier,
         sourceType,
-        locale: filenameLocale ?? details.locale ?? payloadLocale,
+        locale:
+          filenameLocale ??
+          details.locale ??
+          payloadLocale,
         pageId: payloadPageId ?? details.pageId,
       };
       const snapshotId = details.cleansedId ?? uploadId;
@@ -598,7 +605,10 @@ export default function IngestionPage() {
                 backendMessage: details.message ?? upload.backendMessage,
                 sourceIdentifier,
                 sourceType,
-                locale: payloadMetadata.locale ?? details.locale ?? upload.locale,
+                locale:
+                  payloadMetadata.locale ??
+                  details.locale ??
+                  upload.locale,
                 pageId: payloadMetadata.pageId ?? details.pageId ?? upload.pageId,
               }
             : upload,
@@ -630,7 +640,9 @@ export default function IngestionPage() {
         uploadedAt: Date.now(),
         sourceIdentifier,
         sourceType,
-        locale: payloadMetadata.locale ?? details.locale,
+        locale:
+          payloadMetadata.locale ??
+          details.locale,
         pageId: payloadMetadata.pageId ?? details.pageId,
       };
       const snapshotId = details.cleansedId ?? uploadId;
@@ -733,7 +745,9 @@ export default function IngestionPage() {
               backendMessage: details.message ?? upload.backendMessage,
               sourceIdentifier,
               sourceType,
-              locale: details.locale ?? upload.locale,
+              locale:
+                details.locale ??
+                upload.locale,
               pageId: details.pageId ?? upload.pageId,
             }
           : upload,

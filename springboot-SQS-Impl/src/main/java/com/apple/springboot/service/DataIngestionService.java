@@ -65,6 +65,7 @@ public class DataIngestionService {
     private final ContentHashRepository contentHashRepository;
     private final ItemVersionHashStore itemVersionHashStore;
     private final ContextUpdateService contextUpdateService;
+    private final AssetImageStoreService assetImageStoreService;
     private final Set<String> excludedItemTypes;
 
     // Configurable behavior flags
@@ -118,12 +119,14 @@ public class DataIngestionService {
                                 S3StorageService s3StorageService,
                                 @Value("${app.s3.bucket-name}") String defaultS3BucketName,
                                 ContextUpdateService contextUpdateService,
+                                AssetImageStoreService assetImageStoreService,
                                 @Value("${app.ingestion.excluded-item-types:}") String excludedItemTypesProperty) {
         this.rawDataStoreRepository = rawDataStoreRepository;
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.contentHashRepository = contentHashRepository;
         this.itemVersionHashStore = itemVersionHashStore;
         this.contextUpdateService = contextUpdateService;
+        this.assetImageStoreService = assetImageStoreService;
         this.objectMapper = objectMapper;
         this.resourceLoader = resourceLoader;
         this.jsonFilePath = jsonFilePath;
@@ -349,7 +352,17 @@ public class DataIngestionService {
      */
     @Transactional
     public CleansedDataStore ingestAndCleanseJsonPayload(String jsonPayload, String sourceIdentifier) throws JsonProcessingException {
-        RawDataStore rawDataStore = findOrCreateRawDataStore(jsonPayload, sourceIdentifier);
+        return ingestAndCleanseJsonPayload(jsonPayload, sourceIdentifier, UploadRequestMetadata.of(null, null, null, null, null, null));
+    }
+
+    /**
+     * Ingests a raw JSON payload with optional upload metadata and persists the cleansed result.
+     */
+    @Transactional
+    public CleansedDataStore ingestAndCleanseJsonPayload(String jsonPayload,
+                                                         String sourceIdentifier,
+                                                         UploadRequestMetadata uploadMetadata) throws JsonProcessingException {
+        RawDataStore rawDataStore = findOrCreateRawDataStore(jsonPayload, sourceIdentifier, uploadMetadata);
         if (rawDataStore == null) {
             return null;
         }
@@ -415,7 +428,9 @@ public class DataIngestionService {
     /**
      * Finds an existing RawDataStore or creates a new one for the payload.
      */
-    private RawDataStore findOrCreateRawDataStore(String jsonPayload, String sourceIdentifier) {
+    private RawDataStore findOrCreateRawDataStore(String jsonPayload,
+                                                  String sourceIdentifier,
+                                                  UploadRequestMetadata uploadMetadata) {
         if (jsonPayload == null || jsonPayload.trim().isEmpty()) {
             throw new IllegalArgumentException("JSON payload cannot be null or empty for sourceIdentifier " + sourceIdentifier);
         }
@@ -428,7 +443,7 @@ public class DataIngestionService {
             RawDataStore existingRawData = existingMatchingContent.get();
             logger.info("Ingested content for sourceIdentifier '{}' matches existing raw data ID {}. Skipping new version.",
                     sourceIdentifier, existingRawData.getId());
-            backfillPayloadColumnsIfMissing(existingRawData, jsonPayload);
+            backfillPayloadColumnsIfMissing(existingRawData, jsonPayload, uploadMetadata);
             return rawDataStoreRepository.save(existingRawData);
         }
 
@@ -438,7 +453,7 @@ public class DataIngestionService {
         rawDataStore.setStatus(resolveUploadStatus(sourceIdentifier));
         rawDataStore.setContentHash(newContentHash);
         rawDataStore.setLatest(true);
-        populatePayloadColumns(rawDataStore, jsonPayload);
+        populatePayloadColumns(rawDataStore, jsonPayload, uploadMetadata);
 
         Optional<RawDataStore> latestVersionOpt = rawDataStoreRepository.findTopBySourceUriOrderByVersionDesc(sourceIdentifier);
         if (latestVersionOpt.isPresent()) {
@@ -460,17 +475,22 @@ public class DataIngestionService {
     /**
      * Populates raw data storage fields from the payload.
      */
-    private void populatePayloadColumns(RawDataStore rawDataStore, String jsonPayload) {
+    private void populatePayloadColumns(RawDataStore rawDataStore,
+                                        String jsonPayload,
+                                        UploadRequestMetadata uploadMetadata) {
         rawDataStore.setRawContentText(jsonPayload);
         rawDataStore.setRawContentBinary(jsonPayload.getBytes(StandardCharsets.UTF_8));
         rawDataStore.setSourceContentType("application/json");
         rawDataStore.setSourceMetadata(extractSourceMetadata(jsonPayload));
+        applyUploadRequestMetadata(rawDataStore, uploadMetadata);
     }
 
     /**
      * Backfills missing raw payload columns on existing records.
      */
-    private void backfillPayloadColumnsIfMissing(RawDataStore rawDataStore, String jsonPayload) {
+    private void backfillPayloadColumnsIfMissing(RawDataStore rawDataStore,
+                                                 String jsonPayload,
+                                                 UploadRequestMetadata uploadMetadata) {
         if (rawDataStore.getRawContentText() == null) {
             rawDataStore.setRawContentText(jsonPayload);
         }
@@ -482,6 +502,9 @@ public class DataIngestionService {
         }
         if (rawDataStore.getSourceMetadata() == null) {
             rawDataStore.setSourceMetadata(extractSourceMetadata(jsonPayload));
+        }
+        if (rawDataStore.getSourceRequestMetadata() == null || rawDataStore.getSourceRequestMetadata().isBlank()) {
+            applyUploadRequestMetadata(rawDataStore, uploadMetadata);
         }
     }
 
@@ -524,6 +547,21 @@ public class DataIngestionService {
     }
 
     /**
+     * Persists request metadata as JSON when supplied by the upload request.
+     */
+    private void applyUploadRequestMetadata(RawDataStore rawDataStore, UploadRequestMetadata uploadMetadata) {
+        if (rawDataStore == null || uploadMetadata == null || uploadMetadata.isEmpty()) {
+            return;
+        }
+        try {
+            rawDataStore.setSourceRequestMetadata(objectMapper.writeValueAsString(uploadMetadata.toMap()));
+        } catch (JsonProcessingException e) {
+            logger.warn("Unable to serialize upload request metadata for source {}. Continuing without it.",
+                    rawDataStore.getSourceUri(), e);
+        }
+    }
+
+    /**
      * Processes raw content and returns a cleansed data record.
      */
     private CleansedDataStore processLoadedContent(String rawJsonContent,
@@ -539,6 +577,13 @@ public class DataIngestionService {
                                                    @Nullable CleansedDataStore existingCleansed) throws JsonProcessingException {
         try {
             JsonNode rootNode = objectMapper.readTree(rawJsonContent);
+            // Asset extraction is additive and fail-open; it must never break text ingestion.
+            try {
+                assetImageStoreService.safeExtractAndStore(rootNode, rawDataStore);
+            } catch (Exception assetError) {
+                logger.warn("Asset metadata extraction failed for raw_data_id {}. Continuing ingestion. Reason: {}",
+                        rawDataStore.getId(), assetError.getMessage());
+            }
             List<Map<String, Object>> allExtractedItems = new ArrayList<>();
             Envelope rootEnvelope = new Envelope();
             rootEnvelope.setSourcePath(rawDataStore.getSourceUri());

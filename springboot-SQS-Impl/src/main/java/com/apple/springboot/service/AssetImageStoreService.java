@@ -169,7 +169,7 @@ public class AssetImageStoreService {
 
             // Track observed geo/locale pairs from this upload independently of asset occurrence writes.
             assetRegionLocaleService.recordUploadObservations(
-                    buildUploadRegionObservations(deduplicatedBySlot, requestMetadata)
+                    buildUploadRegionObservations(deduplicatedBySlot, requestMetadata, rawDataStore.getId())
             );
 
             if (!areTablesPresent()) {
@@ -816,7 +816,8 @@ public class AssetImageStoreService {
      */
     private List<AssetRegionLocaleService.RegionLocaleObservation> buildUploadRegionObservations(
             List<ExtractedAssetCandidate> candidates,
-            UploadRequestMetadata requestMetadata) {
+            UploadRequestMetadata requestMetadata,
+            UUID rawDataId) {
         String requestLocale = requestMetadata != null ? normalizeLocale(requestMetadata.locale()) : null;
         String requestGeo = requestMetadata != null ? normalizeGeo(requestMetadata.geo()) : null;
         if (requestGeo == null && requestLocale != null && requestLocale.length() >= 5) {
@@ -834,7 +835,8 @@ public class AssetImageStoreService {
                     requestGeo,
                     requestLocale,
                     "Uploaded locale " + requestLocale,
-                    toStorefrontPathFromLocale(requestLocale)
+                    toStorefrontPathFromLocale(requestLocale),
+                    rawDataId
             ));
         }
         Map<String, AssetRegionLocaleService.RegionLocaleObservation> deduped = new LinkedHashMap<>();
@@ -860,7 +862,8 @@ public class AssetImageStoreService {
                             geo,
                             locale,
                             "Uploaded locale " + locale,
-                            toStorefrontPathFromLocale(locale)
+                            toStorefrontPathFromLocale(locale),
+                            rawDataId
                     )
             );
         }
@@ -872,7 +875,8 @@ public class AssetImageStoreService {
                             requestGeo,
                             requestLocale,
                             "Uploaded locale " + requestLocale,
-                            toStorefrontPathFromLocale(requestLocale)
+                            toStorefrontPathFromLocale(requestLocale),
+                            rawDataId
                     )
             );
         }
@@ -881,7 +885,8 @@ public class AssetImageStoreService {
                     requestGeo,
                     requestLocale,
                     "Uploaded locale " + requestLocale,
-                    toStorefrontPathFromLocale(requestLocale)
+                    toStorefrontPathFromLocale(requestLocale),
+                    rawDataId
             ));
         }
         return new ArrayList<>(deduped.values());

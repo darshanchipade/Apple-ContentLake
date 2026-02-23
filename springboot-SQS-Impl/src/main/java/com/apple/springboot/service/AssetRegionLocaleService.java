@@ -18,6 +18,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Upload-driven locale reference service for Asset Finder options.
@@ -48,6 +49,7 @@ public class AssetRegionLocaleService {
     private final JdbcTemplate jdbcTemplate;
     // If schema changes while running, restart app. Until true, keep rechecking.
     private volatile Boolean tablePresent;
+    private volatile Boolean seenTablePresent;
 
     /**
      * Creates a locale service backed by the asset_region_locale_ref table.
@@ -131,7 +133,7 @@ public class AssetRegionLocaleService {
                 }
                 normalizedByLocale.putIfAbsent(
                         locale,
-                        new RegionLocaleObservation(geo, locale, displayName, applePath)
+                        new RegionLocaleObservation(geo, locale, displayName, applePath, observation.rawDataId())
                 );
             }
 
@@ -159,6 +161,7 @@ public class AssetRegionLocaleService {
             }
 
             for (RegionLocaleObservation observation : normalizedByLocale.values()) {
+                boolean shouldIncrementSeenCount = shouldIncrementSeenCount(observation, now);
                 AssetRegionLocaleRef row = existingByLocale.get(observation.localeCode());
                 if (row == null) {
                     row = new AssetRegionLocaleRef();
@@ -181,7 +184,8 @@ public class AssetRegionLocaleService {
                 row.setApplePath(observation.applePath());
                 row.setActive(true);
                 row.setLastSeenAt(now);
-                row.setSeenCount(Optional.ofNullable(row.getSeenCount()).orElse(0L) + 1L);
+                long current = Optional.ofNullable(row.getSeenCount()).orElse(0L);
+                row.setSeenCount(shouldIncrementSeenCount ? Math.max(1L, current + 1L) : Math.max(1L, current));
                 changedRows.add(row);
             }
 
@@ -277,6 +281,61 @@ public class AssetRegionLocaleService {
             tablePresent = true;
         }
         return present;
+    }
+
+    /**
+     * Returns true when the unique-seen table exists in the current schema.
+     */
+    boolean isSeenTablePresent() {
+        if (Boolean.TRUE.equals(seenTablePresent)) {
+            return true;
+        }
+        boolean present;
+        try {
+            String reg = jdbcTemplate.queryForObject(
+                    "select to_regclass('public.asset_region_locale_ref_seen')",
+                    String.class
+            );
+            present = reg != null;
+        } catch (Exception ignored) {
+            present = false;
+        }
+        if (present) {
+            seenTablePresent = true;
+        }
+        return present;
+    }
+
+    /**
+     * Returns true only for first observation per (source_type, locale_code, raw_data_id).
+     */
+    private boolean shouldIncrementSeenCount(RegionLocaleObservation observation, OffsetDateTime now) {
+        if (observation == null || observation.rawDataId() == null) {
+            return true;
+        }
+        if (!isSeenTablePresent()) {
+            return true;
+        }
+        try {
+            int inserted = jdbcTemplate.update(
+                    """
+                    insert into public.asset_region_locale_ref_seen
+                        (source_type, locale_code, raw_data_id, observed_at, created_at)
+                    values (?, ?, ?, ?, ?)
+                    on conflict (source_type, locale_code, raw_data_id) do nothing
+                    """,
+                    SOURCE_UPLOAD,
+                    observation.localeCode(),
+                    observation.rawDataId(),
+                    now,
+                    now
+            );
+            return inserted > 0;
+        } catch (Exception e) {
+            logger.warn("Failed to persist locale seen marker for locale {} rawDataId {}. Falling back to increment. Reason: {}",
+                    observation.localeCode(), observation.rawDataId(), e.getMessage());
+            return true;
+        }
     }
 
     /**
@@ -378,5 +437,9 @@ public class AssetRegionLocaleService {
     /**
      * Upload observation of one geo/locale pair.
      */
-    public record RegionLocaleObservation(String geoCode, String localeCode, String displayName, String applePath) {}
+    public record RegionLocaleObservation(String geoCode,
+                                          String localeCode,
+                                          String displayName,
+                                          String applePath,
+                                          UUID rawDataId) {}
 }

@@ -8,6 +8,7 @@ DROP TABLE IF EXISTS asset_metadata_occurrence_audit;
 DROP TABLE IF EXISTS asset_metadata_upload_summary;
 DROP TABLE IF EXISTS asset_metadata_occurrence;
 DROP TABLE IF EXISTS asset_metadata_catalog;
+DROP TABLE IF EXISTS asset_region_locale_ref_seen;
 DROP TABLE IF EXISTS asset_region_locale_ref;
 DROP TABLE IF EXISTS asset_image_store;
 
@@ -100,6 +101,17 @@ CREATE TABLE asset_region_locale_ref (
     CONSTRAINT uk_asset_region_locale_ref_path_display UNIQUE (apple_path, display_name)
 );
 
+-- Marker table used to enforce once-per-upload seen_count increments.
+CREATE TABLE asset_region_locale_ref_seen (
+    source_type TEXT NOT NULL,
+    locale_code TEXT NOT NULL,
+    raw_data_id UUID NOT NULL,
+    observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT pk_asset_region_locale_ref_seen
+        PRIMARY KEY (source_type, locale_code, raw_data_id)
+);
+
 -- Indexes for query paths and joins.
 CREATE INDEX idx_asset_metadata_catalog_interactive
     ON asset_metadata_catalog (interactive_path);
@@ -157,5 +169,11 @@ CREATE INDEX idx_asset_region_locale_ref_source_type
 
 CREATE INDEX idx_asset_region_locale_ref_active
     ON asset_region_locale_ref (active);
+
+CREATE INDEX idx_asset_region_locale_ref_seen_raw_data_id
+    ON asset_region_locale_ref_seen (raw_data_id);
+
+CREATE INDEX idx_asset_region_locale_ref_seen_locale
+    ON asset_region_locale_ref_seen (locale_code);
 
 COMMIT;

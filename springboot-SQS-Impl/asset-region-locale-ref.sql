@@ -17,6 +17,18 @@ CREATE TABLE IF NOT EXISTS asset_region_locale_ref (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- One marker row per unique (source_type, locale_code, raw_data_id),
+-- used so seen_count increments only once per upload id.
+CREATE TABLE IF NOT EXISTS asset_region_locale_ref_seen (
+    source_type TEXT NOT NULL,
+    locale_code TEXT NOT NULL,
+    raw_data_id UUID NOT NULL,
+    observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT pk_asset_region_locale_ref_seen
+        PRIMARY KEY (source_type, locale_code, raw_data_id)
+);
+
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -45,5 +57,11 @@ CREATE INDEX IF NOT EXISTS idx_asset_region_locale_ref_source_type
 
 CREATE INDEX IF NOT EXISTS idx_asset_region_locale_ref_active
     ON asset_region_locale_ref (active);
+
+CREATE INDEX IF NOT EXISTS idx_asset_region_locale_ref_seen_raw_data_id
+    ON asset_region_locale_ref_seen (raw_data_id);
+
+CREATE INDEX IF NOT EXISTS idx_asset_region_locale_ref_seen_locale
+    ON asset_region_locale_ref_seen (locale_code);
 
 COMMIT;

@@ -33,6 +33,11 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
     void deleteBySourceUriAndSourceVersion(String sourceUri, Integer sourceVersion);
 
     /**
+     * Loads latest occurrence rows for a source URI (active + inactive).
+     */
+    List<AssetMetadataOccurrence> findBySourceUri(String sourceUri);
+
+    /**
      * Counts occurrence rows for a raw_data_store record.
      */
     long countByRawDataId(UUID rawDataId);
@@ -45,6 +50,7 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
                     select o.*
                     from public.asset_metadata_occurrence o
                     where (:tenant is null or lower(convert_from(cast(o.tenant as bytea), 'UTF8')) = lower(cast(:tenant as text)))
+                      and o.active = true
                       and (:environment is null or lower(convert_from(cast(o.environment as bytea), 'UTF8')) = lower(cast(:environment as text)))
                       and (:project is null or lower(convert_from(cast(o.project as bytea), 'UTF8')) = lower(cast(:project as text)))
                       and (
@@ -61,6 +67,7 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
                     select count(*)
                     from public.asset_metadata_occurrence o
                     where (:tenant is null or lower(convert_from(cast(o.tenant as bytea), 'UTF8')) = lower(cast(:tenant as text)))
+                      and o.active = true
                       and (:environment is null or lower(convert_from(cast(o.environment as bytea), 'UTF8')) = lower(cast(:environment as text)))
                       and (:project is null or lower(convert_from(cast(o.project as bytea), 'UTF8')) = lower(cast(:project as text)))
                       and (
@@ -91,7 +98,8 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
             value = """
                     select distinct convert_from(cast(o.site as bytea), 'UTF8') as site
                     from public.asset_metadata_occurrence o
-                    where o.site is not null
+                    where o.active = true
+                      and o.site is not null
                       and convert_from(cast(o.site as bytea), 'UTF8') <> ''
                     order by site
                     """,
@@ -108,7 +116,8 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
                         convert_from(cast(o.geo as bytea), 'UTF8') as geo,
                         convert_from(cast(o.locale as bytea), 'UTF8') as locale
                     from public.asset_metadata_occurrence o
-                    where o.geo is not null
+                    where o.active = true
+                      and o.geo is not null
                       and convert_from(cast(o.geo as bytea), 'UTF8') <> ''
                       and o.locale is not null
                       and convert_from(cast(o.locale as bytea), 'UTF8') <> ''

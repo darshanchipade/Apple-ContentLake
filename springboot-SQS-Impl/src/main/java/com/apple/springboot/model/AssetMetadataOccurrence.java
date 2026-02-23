@@ -19,7 +19,7 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 
 /**
- * Versioned occurrence references to canonical catalog metadata rows.
+ * Latest-only occurrence references to canonical catalog metadata rows.
  */
 @Setter
 @Getter
@@ -28,8 +28,8 @@ import java.util.UUID;
         name = "asset_metadata_occurrence",
         uniqueConstraints = {
                 @UniqueConstraint(
-                        name = "uk_asset_metadata_occurrence_source_version_slot",
-                        columnNames = {"source_uri", "source_version", "asset_slot_key"}
+                        name = "uk_asset_metadata_occurrence_source_slot",
+                        columnNames = {"source_uri", "asset_slot_key"}
                 )
         },
         indexes = {
@@ -59,6 +59,12 @@ public class AssetMetadataOccurrence {
 
     @Column(name = "source_version")
     private Integer sourceVersion;
+
+    @Column(name = "first_seen_version")
+    private Integer firstSeenVersion;
+
+    @Column(name = "last_seen_version")
+    private Integer lastSeenVersion;
 
     @Column(name = "asset_slot_key", nullable = false, columnDefinition = "TEXT")
     private String assetSlotKey;
@@ -90,6 +96,9 @@ public class AssetMetadataOccurrence {
     @Column(name = "locale", columnDefinition = "TEXT")
     private String locale;
 
+    @Column(name = "active", nullable = false)
+    private Boolean active = true;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "request_metadata_json", columnDefinition = "jsonb")
     private String requestMetadataJson;
@@ -107,6 +116,9 @@ public class AssetMetadataOccurrence {
     void onCreate() {
         OffsetDateTime now = OffsetDateTime.now();
         if (createdAt == null) createdAt = now;
+        if (active == null) {
+            active = true;
+        }
         updatedAt = now;
     }
 

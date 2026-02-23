@@ -10,9 +10,11 @@ Asset Finder is an additive pipeline on top of ingestion/cleansing:
 
 - **Backend (Spring Boot):**
   - Extracts image metadata from uploaded JSON.
-  - Stores data in normalized tables:
+  - Stores data in normalized tables (Option 3):
     - `asset_metadata_catalog` (canonical metadata)
-    - `asset_metadata_occurrence` (versioned occurrence rows)
+    - `asset_metadata_occurrence` (latest-only occurrence rows)
+    - `asset_metadata_occurrence_audit` (append-only change history)
+    - `asset_metadata_upload_summary` (stable per-upload asset counts)
     - `asset_region_locale_ref` (upload-observed geo/locale reference)
   - Serves options/search/detail/count APIs for UI.
 
@@ -51,22 +53,41 @@ One row per unique metadata hash (`metadata_hash` unique):
   - `metadata_hash`
   - `created_at`, `updated_at`
 
-## 2.3 `asset_metadata_occurrence` (versioned occurrences)
+## 2.3 `asset_metadata_occurrence` (latest-only occurrences)
 
-One row per source/version/slot occurrence:
+One row per `(source_uri, asset_slot_key)` current state:
 
 - Link fields:
   - `catalog_id` -> canonical row
   - `raw_data_id`
 - Versioning and uniqueness:
-  - `source_uri`, `source_version`, `asset_slot_key`
-  - unique constraint: `(source_uri, source_version, asset_slot_key)`
+  - `source_uri`, `source_version`, `first_seen_version`, `last_seen_version`
+  - `active` indicates whether slot currently exists in latest source snapshot
+  - unique constraint: `(source_uri, asset_slot_key)`
 - Context/filter fields:
   - `tenant`, `environment`, `project`, `site`, `geo`, `locale`
   - `section_path`, `section_uri`, `asset_node_path`
   - `request_metadata_json`
 
-## 2.4 `asset_region_locale_ref` (upload-driven options reference)
+## 2.4 `asset_metadata_occurrence_audit` (change history)
+
+Append-only event stream for occurrence changes:
+
+- `event_type` (`INSERT`, `UPDATE`, `DELETE`)
+- `old_catalog_id`, `new_catalog_id`
+- `old_context_json`, `new_context_json`
+- `raw_data_id`, `source_uri`, `source_version`, `asset_slot_key`
+- `created_at`
+
+## 2.5 `asset_metadata_upload_summary` (upload count history)
+
+Stable count record per `raw_data_id`:
+
+- `source_uri`, `source_version`
+- `asset_count`
+- timestamps
+
+## 2.6 `asset_region_locale_ref` (upload-driven options reference)
 
 Upload-observed geo/locale rows:
 
@@ -127,13 +148,18 @@ For each run:
 
 1. Build candidate hash values:
    - `metadata_hash` for catalog dedupe
-   - `asset_slot_key` for per-source/version slot dedupe
+   - `asset_slot_key` for slot identity
 2. Deduplicate in-memory by slot.
-3. Replace prior occurrence snapshot for same `(source_uri, source_version)`.
-4. Upsert catalog rows by `metadata_hash`.
-5. Insert occurrence rows referencing catalog IDs.
+3. Upsert catalog rows by `metadata_hash`.
+4. For each slot in the upload:
+   - insert current row if new
+   - update current row if changed
+   - keep current row (touch latest version/raw id) if unchanged
+5. Mark previously active slots missing from upload as `active=false`.
+6. Write audit events only for changes (`INSERT/UPDATE/DELETE`).
+7. Upsert `asset_metadata_upload_summary` for stable per-upload count.
 
-This guarantees replay safety and versioned occurrence history.
+This guarantees latest-state search performance and reduced duplication while preserving change history.
 
 ## 3.6 Region/locale reference updates
 
@@ -182,8 +208,8 @@ This is why selected site values now align better with expected counts.
 
 ## 4.3 Detail and count
 
-- detail endpoint joins occurrence + catalog for full popup data.
-- count endpoint returns extracted row count for a specific cleansed upload id.
+- detail endpoint joins current occurrence + catalog for full popup data.
+- count endpoint uses upload summary (with safe fallback) for a specific cleansed upload id.
 
 ---
 
@@ -228,6 +254,8 @@ That script recreates:
 
 - `asset_metadata_catalog`
 - `asset_metadata_occurrence`
+- `asset_metadata_occurrence_audit`
+- `asset_metadata_upload_summary`
 - `asset_region_locale_ref`
 - indexes + constraints
 

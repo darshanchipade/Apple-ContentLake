@@ -8,11 +8,15 @@ import com.apple.springboot.dto.AssetFinderSearchResponse;
 import com.apple.springboot.dto.AssetFinderTileDto;
 import com.apple.springboot.model.AssetMetadataCatalog;
 import com.apple.springboot.model.AssetMetadataOccurrence;
+import com.apple.springboot.model.AssetMetadataOccurrenceAudit;
+import com.apple.springboot.model.AssetMetadataUploadSummary;
 import com.apple.springboot.model.CleansedDataStore;
 import com.apple.springboot.model.RawDataStore;
 import com.apple.springboot.model.UploadRequestMetadata;
 import com.apple.springboot.repository.AssetMetadataCatalogRepository;
+import com.apple.springboot.repository.AssetMetadataOccurrenceAuditRepository;
 import com.apple.springboot.repository.AssetMetadataOccurrenceRepository;
+import com.apple.springboot.repository.AssetMetadataUploadSummaryRepository;
 import com.apple.springboot.repository.CleansedDataStoreRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -51,9 +55,10 @@ import java.util.stream.Collectors;
 /**
  * Extracts image metadata from uploaded JSON and serves Asset Finder queries.
  *
- * Normalized design:
+ * Normalized design (Option 3):
  * - asset_metadata_catalog: canonical metadata rows deduplicated by metadata_hash.
- * - asset_metadata_occurrence: per source/version occurrence rows referencing catalog_id.
+ * - asset_metadata_occurrence: latest-only rows per source_uri + slot.
+ * - asset_metadata_occurrence_audit: append-only history of occurrence mutations.
  */
 @Service
 public class AssetImageStoreService {
@@ -93,6 +98,8 @@ public class AssetImageStoreService {
 
     private final AssetMetadataCatalogRepository catalogRepository;
     private final AssetMetadataOccurrenceRepository occurrenceRepository;
+    private final AssetMetadataOccurrenceAuditRepository occurrenceAuditRepository;
+    private final AssetMetadataUploadSummaryRepository uploadSummaryRepository;
     private final CleansedDataStoreRepository cleansedDataStoreRepository;
     private final AssetRegionLocaleService assetRegionLocaleService;
     private final ObjectMapper objectMapper;
@@ -127,12 +134,16 @@ public class AssetImageStoreService {
      */
     public AssetImageStoreService(AssetMetadataCatalogRepository catalogRepository,
                                   AssetMetadataOccurrenceRepository occurrenceRepository,
+                                  AssetMetadataOccurrenceAuditRepository occurrenceAuditRepository,
+                                  AssetMetadataUploadSummaryRepository uploadSummaryRepository,
                                   CleansedDataStoreRepository cleansedDataStoreRepository,
                                   AssetRegionLocaleService assetRegionLocaleService,
                                   ObjectMapper objectMapper,
                                   JdbcTemplate jdbcTemplate) {
         this.catalogRepository = catalogRepository;
         this.occurrenceRepository = occurrenceRepository;
+        this.occurrenceAuditRepository = occurrenceAuditRepository;
+        this.uploadSummaryRepository = uploadSummaryRepository;
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.assetRegionLocaleService = assetRegionLocaleService;
         this.objectMapper = objectMapper;
@@ -158,51 +169,152 @@ public class AssetImageStoreService {
 
             // Track observed geo/locale pairs from this upload independently of asset occurrence writes.
             assetRegionLocaleService.recordUploadObservations(
-                    buildUploadRegionObservations(deduplicatedBySlot, requestMetadata)
+                    buildUploadRegionObservations(deduplicatedBySlot, requestMetadata, rawDataStore.getId())
             );
 
             if (!areTablesPresent()) {
                 return;
             }
 
-            // Replace the full occurrence snapshot for this source/version to avoid replay collisions.
-            if (rawDataStore.getSourceUri() != null && rawDataStore.getVersion() != null) {
-                occurrenceRepository.deleteBySourceUriAndSourceVersion(
-                        rawDataStore.getSourceUri(), rawDataStore.getVersion()
-                );
-            } else {
-                occurrenceRepository.deleteByRawDataId(rawDataStore.getId());
+            String sourceUri = rawDataStore.getSourceUri();
+            List<AssetMetadataOccurrence> existingForSource = sourceUri != null
+                    ? occurrenceRepository.findBySourceUri(sourceUri)
+                    : List.of();
+            Map<String, AssetMetadataOccurrence> existingBySlot = new LinkedHashMap<>();
+            List<AssetMetadataOccurrence> duplicateLegacyRows = new ArrayList<>();
+            for (AssetMetadataOccurrence row : existingForSource) {
+                if (row != null && row.getAssetSlotKey() != null) {
+                    AssetMetadataOccurrence prior = existingBySlot.putIfAbsent(row.getAssetSlotKey(), row);
+                    if (prior != null) {
+                        duplicateLegacyRows.add(row);
+                    }
+                }
             }
 
-            if (!deduplicatedBySlot.isEmpty()) {
-                List<AssetMetadataOccurrence> occurrences = new ArrayList<>(deduplicatedBySlot.size());
-                for (ExtractedAssetCandidate candidate : deduplicatedBySlot) {
-                    AssetMetadataCatalog catalog = upsertCatalog(candidate);
-                    AssetMetadataOccurrence occurrence = new AssetMetadataOccurrence();
-                    occurrence.setCatalogId(catalog.getId());
-                    occurrence.setRawDataId(rawDataStore.getId());
-                    occurrence.setSourceUri(rawDataStore.getSourceUri());
-                    occurrence.setSourceVersion(rawDataStore.getVersion());
-                    occurrence.setAssetSlotKey(candidate.assetSlotKey());
-                    occurrence.setAssetNodePath(candidate.assetNodePath());
-                    occurrence.setSectionPath(candidate.sectionPath());
-                    occurrence.setSectionUri(candidate.sectionUri());
-                    occurrence.setTenant(candidate.tenant());
-                    occurrence.setEnvironment(candidate.environment());
-                    occurrence.setProject(candidate.project());
-                    occurrence.setSite(candidate.site());
-                    occurrence.setGeo(candidate.geo());
-                    occurrence.setLocale(candidate.locale());
-                    occurrence.setRequestMetadataJson(candidate.requestMetadataJson());
-                    occurrences.add(occurrence);
+            List<AssetMetadataOccurrence> rowsToSave = new ArrayList<>();
+            List<AssetMetadataOccurrenceAudit> auditRows = new ArrayList<>();
+            Set<String> seenSlots = new LinkedHashSet<>();
+            int insertCount = 0;
+            int updateCount = 0;
+            int unchangedCount = 0;
+            int deactivateCount = 0;
+
+            for (ExtractedAssetCandidate candidate : deduplicatedBySlot) {
+                AssetMetadataCatalog catalog = upsertCatalog(candidate);
+                AssetMetadataOccurrence current = existingBySlot.get(candidate.assetSlotKey());
+                if (current == null) {
+                    AssetMetadataOccurrence created = new AssetMetadataOccurrence();
+                    created.setCatalogId(catalog.getId());
+                    created.setRawDataId(rawDataStore.getId());
+                    created.setSourceUri(rawDataStore.getSourceUri());
+                    created.setSourceVersion(rawDataStore.getVersion());
+                    created.setFirstSeenVersion(rawDataStore.getVersion());
+                    created.setLastSeenVersion(rawDataStore.getVersion());
+                    created.setAssetSlotKey(candidate.assetSlotKey());
+                    created.setAssetNodePath(candidate.assetNodePath());
+                    created.setSectionPath(candidate.sectionPath());
+                    created.setSectionUri(candidate.sectionUri());
+                    created.setTenant(candidate.tenant());
+                    created.setEnvironment(candidate.environment());
+                    created.setProject(candidate.project());
+                    created.setSite(candidate.site());
+                    created.setGeo(candidate.geo());
+                    created.setLocale(candidate.locale());
+                    created.setRequestMetadataJson(candidate.requestMetadataJson());
+                    created.setActive(true);
+                    rowsToSave.add(created);
+                    auditRows.add(buildAuditRow(rawDataStore, candidate.assetSlotKey(), "INSERT", null, created));
+                    insertCount++;
+                } else {
+                    AssetMetadataOccurrence before = snapshotOccurrence(current);
+                    current.setCatalogId(catalog.getId());
+                    current.setRawDataId(rawDataStore.getId());
+                    current.setSourceUri(rawDataStore.getSourceUri());
+                    current.setSourceVersion(rawDataStore.getVersion());
+                    current.setLastSeenVersion(rawDataStore.getVersion());
+                    if (current.getFirstSeenVersion() == null) {
+                        current.setFirstSeenVersion(rawDataStore.getVersion());
+                    }
+                    current.setAssetNodePath(candidate.assetNodePath());
+                    current.setSectionPath(candidate.sectionPath());
+                    current.setSectionUri(candidate.sectionUri());
+                    current.setTenant(candidate.tenant());
+                    current.setEnvironment(candidate.environment());
+                    current.setProject(candidate.project());
+                    current.setSite(candidate.site());
+                    current.setGeo(candidate.geo());
+                    current.setLocale(candidate.locale());
+                    current.setRequestMetadataJson(candidate.requestMetadataJson());
+                    current.setActive(true);
+                    rowsToSave.add(current);
+
+                    if (isOccurrenceChanged(before, current)) {
+                        auditRows.add(buildAuditRow(rawDataStore, candidate.assetSlotKey(), "UPDATE", before, current));
+                        updateCount++;
+                    } else {
+                        unchangedCount++;
+                    }
                 }
-                occurrenceRepository.saveAll(occurrences);
-                // Force DB constraint checks inside this guarded block.
+                seenSlots.add(candidate.assetSlotKey());
+            }
+
+            for (AssetMetadataOccurrence existing : existingForSource) {
+                if (existing == null || existing.getAssetSlotKey() == null) {
+                    continue;
+                }
+                if (seenSlots.contains(existing.getAssetSlotKey())) {
+                    continue;
+                }
+                if (!Boolean.TRUE.equals(existing.getActive())) {
+                    continue;
+                }
+                AssetMetadataOccurrence before = snapshotOccurrence(existing);
+                existing.setActive(false);
+                existing.setSourceVersion(rawDataStore.getVersion());
+                existing.setLastSeenVersion(rawDataStore.getVersion());
+                rowsToSave.add(existing);
+                auditRows.add(buildAuditRow(rawDataStore, existing.getAssetSlotKey(), "DELETE", before, existing));
+                deactivateCount++;
+            }
+
+            for (AssetMetadataOccurrence duplicate : duplicateLegacyRows) {
+                if (duplicate == null) {
+                    continue;
+                }
+                if (Boolean.TRUE.equals(duplicate.getActive())) {
+                    AssetMetadataOccurrence before = snapshotOccurrence(duplicate);
+                    duplicate.setActive(false);
+                    duplicate.setSourceVersion(rawDataStore.getVersion());
+                    duplicate.setLastSeenVersion(rawDataStore.getVersion());
+                    rowsToSave.add(duplicate);
+                    auditRows.add(buildAuditRow(rawDataStore, duplicate.getAssetSlotKey(), "DELETE", before, duplicate));
+                    deactivateCount++;
+                }
+            }
+
+            if (!rowsToSave.isEmpty()) {
+                occurrenceRepository.saveAll(rowsToSave);
                 occurrenceRepository.flush();
             }
 
-            logger.info("Asset metadata extraction complete for rawDataId {}. Persisted {} occurrences ({} pre-dedupe).",
-                    rawDataStore.getId(), deduplicatedBySlot.size(), extracted.size());
+            if (!auditRows.isEmpty()) {
+                try {
+                    occurrenceAuditRepository.saveAll(auditRows);
+                } catch (Exception auditError) {
+                    logger.warn("Asset occurrence audit persistence failed for rawDataId {}. Continuing. Reason: {}",
+                            rawDataStore.getId(), auditError.getMessage());
+                }
+            }
+
+            try {
+                upsertUploadSummary(rawDataStore, deduplicatedBySlot.size());
+            } catch (Exception summaryError) {
+                logger.warn("Asset upload summary persistence failed for rawDataId {}. Continuing. Reason: {}",
+                        rawDataStore.getId(), summaryError.getMessage());
+            }
+
+            logger.info("Asset metadata extraction complete for rawDataId {}. Current rows touched: {} (inserted={}, updated={}, unchanged={}, deactivated={}; pre-dedupe={}).",
+                    rawDataStore.getId(), rowsToSave.size(), insertCount, updateCount, unchangedCount, deactivateCount, extracted.size());
         } catch (Exception e) {
             logger.warn("Asset metadata extraction failed for rawDataId {}. Continuing ingestion pipeline. Reason: {}",
                     rawDataStore.getId(), e.getMessage());
@@ -412,7 +524,17 @@ public class AssetImageStoreService {
         long count = 0L;
         if (assetFinderEnabled && tableAvailable && cleansed.getRawDataId() != null) {
             try {
-                count = occurrenceRepository.countByRawDataId(cleansed.getRawDataId());
+                Long summaryCount = null;
+                try {
+                    summaryCount = uploadSummaryRepository.findById(cleansed.getRawDataId())
+                            .map(AssetMetadataUploadSummary::getAssetCount)
+                            .orElse(null);
+                } catch (Exception ignored) {
+                    summaryCount = null;
+                }
+                count = summaryCount != null
+                        ? summaryCount
+                        : occurrenceRepository.countByRawDataId(cleansed.getRawDataId());
             } catch (Exception e) {
                 logger.warn("Unable to count extracted asset rows for rawDataId {}: {}",
                         cleansed.getRawDataId(), e.getMessage());
@@ -420,6 +542,117 @@ public class AssetImageStoreService {
         }
         response.setAssetCount(count);
         return response;
+    }
+
+    /**
+     * Stores per-upload extracted asset counts for stable activity-page history.
+     */
+    private void upsertUploadSummary(RawDataStore rawDataStore, int extractedCount) {
+        if (rawDataStore == null || rawDataStore.getId() == null) {
+            return;
+        }
+        AssetMetadataUploadSummary summary = uploadSummaryRepository.findById(rawDataStore.getId())
+                .orElseGet(AssetMetadataUploadSummary::new);
+        summary.setRawDataId(rawDataStore.getId());
+        summary.setSourceUri(firstNonBlank(rawDataStore.getSourceUri(), "unknown-source"));
+        summary.setSourceVersion(rawDataStore.getVersion());
+        summary.setAssetCount((long) Math.max(0, extractedCount));
+        uploadSummaryRepository.save(summary);
+    }
+
+    /**
+     * Creates an immutable copy used for change comparison and audit snapshots.
+     */
+    private AssetMetadataOccurrence snapshotOccurrence(AssetMetadataOccurrence source) {
+        if (source == null) {
+            return null;
+        }
+        AssetMetadataOccurrence copy = new AssetMetadataOccurrence();
+        copy.setId(source.getId());
+        copy.setCatalogId(source.getCatalogId());
+        copy.setRawDataId(source.getRawDataId());
+        copy.setSourceUri(source.getSourceUri());
+        copy.setSourceVersion(source.getSourceVersion());
+        copy.setFirstSeenVersion(source.getFirstSeenVersion());
+        copy.setLastSeenVersion(source.getLastSeenVersion());
+        copy.setAssetSlotKey(source.getAssetSlotKey());
+        copy.setAssetNodePath(source.getAssetNodePath());
+        copy.setSectionPath(source.getSectionPath());
+        copy.setSectionUri(source.getSectionUri());
+        copy.setTenant(source.getTenant());
+        copy.setEnvironment(source.getEnvironment());
+        copy.setProject(source.getProject());
+        copy.setSite(source.getSite());
+        copy.setGeo(source.getGeo());
+        copy.setLocale(source.getLocale());
+        copy.setRequestMetadataJson(source.getRequestMetadataJson());
+        copy.setActive(source.getActive());
+        return copy;
+    }
+
+    /**
+     * Returns true when latest occurrence state changed in a meaningful way.
+     */
+    private boolean isOccurrenceChanged(AssetMetadataOccurrence before, AssetMetadataOccurrence after) {
+        if (before == null || after == null) {
+            return true;
+        }
+        return !Objects.equals(before.getCatalogId(), after.getCatalogId())
+                || !Objects.equals(before.getAssetNodePath(), after.getAssetNodePath())
+                || !Objects.equals(before.getSectionPath(), after.getSectionPath())
+                || !Objects.equals(before.getSectionUri(), after.getSectionUri())
+                || !Objects.equals(before.getTenant(), after.getTenant())
+                || !Objects.equals(before.getEnvironment(), after.getEnvironment())
+                || !Objects.equals(before.getProject(), after.getProject())
+                || !Objects.equals(before.getSite(), after.getSite())
+                || !Objects.equals(before.getGeo(), after.getGeo())
+                || !Objects.equals(before.getLocale(), after.getLocale())
+                || !Objects.equals(before.getRequestMetadataJson(), after.getRequestMetadataJson())
+                || !Objects.equals(before.getActive(), after.getActive());
+    }
+
+    /**
+     * Builds an audit event row for occurrence inserts/updates/deletes.
+     */
+    private AssetMetadataOccurrenceAudit buildAuditRow(RawDataStore rawDataStore,
+                                                       String slotKey,
+                                                       String eventType,
+                                                       AssetMetadataOccurrence oldRow,
+                                                       AssetMetadataOccurrence newRow) {
+        AssetMetadataOccurrenceAudit audit = new AssetMetadataOccurrenceAudit();
+        audit.setRawDataId(rawDataStore.getId());
+        audit.setSourceUri(firstNonBlank(rawDataStore.getSourceUri(), "unknown-source"));
+        audit.setSourceVersion(rawDataStore.getVersion());
+        audit.setAssetSlotKey(slotKey);
+        audit.setEventType(eventType);
+        audit.setOldCatalogId(oldRow != null ? oldRow.getCatalogId() : null);
+        audit.setNewCatalogId(newRow != null ? newRow.getCatalogId() : null);
+        audit.setOldContextJson(oldRow != null ? serializeJson(occurrenceContextMap(oldRow)) : null);
+        audit.setNewContextJson(newRow != null ? serializeJson(occurrenceContextMap(newRow)) : null);
+        return audit;
+    }
+
+    /**
+     * Produces a compact context map for audit diff payloads.
+     */
+    private Map<String, Object> occurrenceContextMap(AssetMetadataOccurrence row) {
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("rawDataId", row.getRawDataId());
+        context.put("sourceUri", row.getSourceUri());
+        context.put("sourceVersion", row.getSourceVersion());
+        context.put("firstSeenVersion", row.getFirstSeenVersion());
+        context.put("lastSeenVersion", row.getLastSeenVersion());
+        context.put("assetNodePath", row.getAssetNodePath());
+        context.put("sectionPath", row.getSectionPath());
+        context.put("sectionUri", row.getSectionUri());
+        context.put("tenant", row.getTenant());
+        context.put("environment", row.getEnvironment());
+        context.put("project", row.getProject());
+        context.put("site", row.getSite());
+        context.put("geo", row.getGeo());
+        context.put("locale", row.getLocale());
+        context.put("active", row.getActive());
+        return context;
     }
 
     /**
@@ -583,7 +816,8 @@ public class AssetImageStoreService {
      */
     private List<AssetRegionLocaleService.RegionLocaleObservation> buildUploadRegionObservations(
             List<ExtractedAssetCandidate> candidates,
-            UploadRequestMetadata requestMetadata) {
+            UploadRequestMetadata requestMetadata,
+            UUID rawDataId) {
         String requestLocale = requestMetadata != null ? normalizeLocale(requestMetadata.locale()) : null;
         String requestGeo = requestMetadata != null ? normalizeGeo(requestMetadata.geo()) : null;
         if (requestGeo == null && requestLocale != null && requestLocale.length() >= 5) {
@@ -602,7 +836,8 @@ public class AssetImageStoreService {
                     requestGeo,
                     requestLocale,
                     "Uploaded locale " + requestLocale,
-                    toStorefrontPathFromLocale(requestLocale)
+                    toStorefrontPathFromLocale(requestLocale),
+                    rawDataId
             ));
         }
         Map<String, AssetRegionLocaleService.RegionLocaleObservation> deduped = new LinkedHashMap<>();
@@ -629,7 +864,8 @@ public class AssetImageStoreService {
                             geo,
                             locale,
                             "Uploaded locale " + locale,
-                            toStorefrontPathFromLocale(locale)
+                            toStorefrontPathFromLocale(locale),
+                            rawDataId
                     )
             );
         }
@@ -641,7 +877,8 @@ public class AssetImageStoreService {
                             requestGeo,
                             requestLocale,
                             "Uploaded locale " + requestLocale,
-                            toStorefrontPathFromLocale(requestLocale)
+                            toStorefrontPathFromLocale(requestLocale),
+                            rawDataId
                     )
             );
         }
@@ -650,7 +887,8 @@ public class AssetImageStoreService {
                     requestGeo,
                     requestLocale,
                     "Uploaded locale " + requestLocale,
-                    toStorefrontPathFromLocale(requestLocale)
+                    toStorefrontPathFromLocale(requestLocale),
+                    rawDataId
             ));
         }
         return new ArrayList<>(deduped.values());

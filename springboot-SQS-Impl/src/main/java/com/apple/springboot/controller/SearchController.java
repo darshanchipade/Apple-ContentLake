@@ -1,9 +1,11 @@
 package com.apple.springboot.controller;
 
 import com.apple.springboot.model.ContentChunkWithDistance;
+import com.apple.springboot.model.ParsedQuery;
 import com.apple.springboot.model.RefinementChip;
 import com.apple.springboot.model.SearchRequest;
 import com.apple.springboot.model.SearchResultDto;
+import com.apple.springboot.service.QueryParsingService;
 import com.apple.springboot.service.RefinementService;
 import com.apple.springboot.service.VectorSearchService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -20,6 +22,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @RestController
@@ -31,84 +34,108 @@ public class SearchController {
 
     private final RefinementService refinementService;
     private final VectorSearchService vectorSearchService;
+    private final QueryParsingService queryParsingService;
 
     /**
-     * Wires refinement and vector search services for API endpoints.
+     * Wires refinement, vector search, and query parsing services for API
+     * endpoints.
      */
     @Autowired
-    public SearchController(RefinementService refinementService, VectorSearchService vectorSearchService) {
+    public SearchController(RefinementService refinementService, VectorSearchService vectorSearchService,
+            QueryParsingService queryParsingService) {
         this.refinementService = refinementService;
         this.vectorSearchService = vectorSearchService;
+        this.queryParsingService = queryParsingService;
     }
 
     /**
      * Returns refinement chip suggestions for a given query string.
      */
-    @Operation(
-            summary = "Get refinement chips for a query",
-            description = "Retrieves refinement chips (suggestions) based on the provided query. " +
-                    "These chips can be used to refine search queries."
-    )
+    @Operation(summary = "Get refinement chips for a query", description = "Retrieves refinement chips (suggestions) based on the provided query. "
+            +
+            "These chips can be used to refine search queries.")
     @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "Successfully retrieved refinement chips",
-                    content = @Content(mediaType = "application/json",
-                            schema = @Schema(implementation = RefinementChip.class))),
+            @ApiResponse(responseCode = "200", description = "Successfully retrieved refinement chips", content = @Content(mediaType = "application/json", schema = @Schema(implementation = RefinementChip.class))),
             @ApiResponse(responseCode = "500", description = "Internal server error", content = @Content)
     })
     @GetMapping("/refine")
     public List<RefinementChip> getRefinementChips(
-            @Parameter(description = "Search query to generate refinement chips for", required = true)
-            @RequestParam String query,
-            @Parameter(description = "Maximum number of chips to return (default 15)")
-            @RequestParam(required = false) Integer limit) throws IOException {
-        return refinementService.getRefinementChips(query, limit);
+            @Parameter(description = "Search query to generate refinement chips for", required = true) @RequestParam String query,
+            @Parameter(description = "Maximum number of chips to return (default 15)") @RequestParam(required = false) Integer limit)
+            throws IOException {
+        ParsedQuery parsedQuery = queryParsingService.parseQuery(query);
+        return refinementService.getRefinementChips(parsedQuery, limit);
     }
 
     /**
      * Executes a vector search using the query and optional filters.
      */
-    @Operation(
-            summary = "Vector search endpoint",
-            description = "Performs a vector search based on the provided query and filters. " +
-                    "Returns the top matching content chunks with their metadata. " +
-                    "Supports filtering by tags, keywords, original field name, and context."
-    )
+    @Operation(summary = "Vector search endpoint", description = "Performs a vector search based on the provided query and filters. "
+            +
+            "Returns the top matching content chunks with their metadata. " +
+            "Supports filtering by tags, keywords, original field name, and context.")
     @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "Successfully retrieved search results",
-                    content = @Content(mediaType = "application/json",
-                            schema = @Schema(implementation = SearchResultDto.class))),
+            @ApiResponse(responseCode = "200", description = "Successfully retrieved search results", content = @Content(mediaType = "application/json", schema = @Schema(implementation = SearchResultDto.class))),
             @ApiResponse(responseCode = "500", description = "Internal server error", content = @Content)
     })
     @PostMapping("/search")
     public List<SearchResultDto> search(@RequestBody SearchRequest request) throws IOException {
+        ParsedQuery parsedQuery = queryParsingService.parseQuery(request.getQuery());
+
         log.info(
-                "Search request query='{}', tags={}, keywords={}, role='{}', contextKeys={}",
+                "Search request query='{}', parsedQuery='{}', tags={}, keywords={}, role='{}', contextKeys={}",
                 clip(request != null ? request.getQuery() : null),
+                parsedQuery,
                 request != null ? request.getTags() : null,
                 request != null ? request.getKeywords() : null,
                 request != null ? request.getOriginal_field_name() : null,
-                request != null ? contextKeys(request.getContext()) : null
+                request != null ? contextKeys(request.getContext()) : null);
 
-        );
+        String queryStr = parsedQuery.getQuery();
+        String fieldName = request.getOriginal_field_name() != null ? request.getOriginal_field_name()
+                : parsedQuery.getOriginalFieldName();
+        List<String> tags = request.getTags() != null ? request.getTags() : parsedQuery.getTags();
+        List<String> keywords = request.getKeywords() != null ? request.getKeywords() : parsedQuery.getKeywords();
+        Map<String, Object> context = request.getContext() != null && !request.getContext().isEmpty()
+                ? request.getContext()
+                : parsedQuery.getContextMap();
+        String sectionFilter = parsedQuery.getSectionKeyFilter();
+
+        // In the database schemas, UI properties like "page-title" or "headline" are
+        // matched
+        // using the "original_field_name" parameter (which matches DB key or _path leaf
+        // nodes).
+        // If the LLM correctly mapped it to "sectionName" in the context map, we'll
+        // extract it
+        // and override the fieldName for the VectorSearch backend, while removing it
+        // from contextMap
+        // to avoid incorrect exact JSONB matching.
+        if (context != null && context.containsKey("sectionName") && (fieldName == null || fieldName.isBlank())) {
+            fieldName = context.get("sectionName").toString();
+
+            // Create a mutable copy to prevent mutating the original ParsedQuery map
+            Map<String, Object> mutableContext = new java.util.HashMap<>(context);
+            mutableContext.remove("sectionName"); // Remove to prevent an exact match JSONB query on the vector search
+            context = mutableContext;
+        }
+
         List<ContentChunkWithDistance> results = vectorSearchService.search(
-                request.getQuery(),
-                request.getOriginal_field_name(),
-                200,                  // limit
-                request.getTags(),
-                request.getKeywords(),
-                request.getContext(),
-                null,                // threshold
-                null                 // sectionKeyFilter (e.g., "chapter-nav-section") or leave null
+                queryStr,
+                fieldName,
+                200, // limit
+                tags,
+                keywords,
+                context,
+                null, // threshold
+                sectionFilter // sectionKeyFilter
         );
-
 
         // Transform the results into the DTO expected by the frontend
         return results.stream().map(result -> {
             return new SearchResultDto(
                     result.getContentChunk().getConsolidatedEnrichedSection().getCleansedText(),
                     result.getContentChunk().getConsolidatedEnrichedSection().getOriginalFieldName(),
-                    result.getContentChunk().getConsolidatedEnrichedSection().getSectionUri()
-            );
+                    result.getContentChunk().getConsolidatedEnrichedSection().getSectionUri());
         }).collect(Collectors.toList());
     }
 

@@ -23,12 +23,14 @@ public class ContentChunkRepositoryImpl implements ContentChunkRepositoryCustom 
      * Builds and executes a native query for vector similarity search.
      */
     @Override
-    public List<ContentChunkWithDistance> findSimilar(float[] embedding, String originalFieldName, String[] tags, String[] keywords, Map<String, Object> contextMap, Double threshold, int limit, String sectionKeyFilter) {
+    public List<ContentChunkWithDistance> findSimilar(float[] embedding, String originalFieldName, String[] tags,
+            String[] keywords, Map<String, Object> contextMap, Double threshold, int limit, String sectionKeyFilter) {
         StringBuilder sql = new StringBuilder("SELECT c.*");
         if (embedding != null) {
             sql.append(", (c.vector <=> CAST(:embedding AS vector)) as distance");
         }
-        sql.append(" FROM content_chunks c JOIN consolidated_enriched_sections s ON c.consolidated_enriched_section_id = s.id WHERE 1=1");
+        sql.append(
+                " FROM content_chunks c JOIN consolidated_enriched_sections s ON c.consolidated_enriched_section_id = s.id WHERE 1=1");
 
         Map<String, Object> params = new HashMap<>();
 
@@ -39,7 +41,12 @@ public class ContentChunkRepositoryImpl implements ContentChunkRepositoryCustom 
             params.put("distance_threshold", threshold);
         }
         if (originalFieldName != null && !originalFieldName.isBlank()) {
-            sql.append(" AND LOWER(s.original_field_name) = LOWER(:originalFieldName)");
+            sql.append(" AND (")
+                    .append("LOWER(COALESCE(s.original_field_name, '')) = LOWER(:originalFieldName) ")
+                    .append("OR LOWER(COALESCE(s.context#>>'{facets,sectionName}', '')) = LOWER(:originalFieldName) ")
+                    .append("OR LOWER(COALESCE(s.context#>>'{envelope,sectionName}', '')) = LOWER(:originalFieldName) ")
+                    .append("OR LOWER(COALESCE(s.context#>>'{sectionName}', '')) = LOWER(:originalFieldName)")
+                    .append(")");
             params.put("originalFieldName", originalFieldName);
         }
         if (tags != null && tags.length > 0) {
@@ -64,8 +71,7 @@ public class ContentChunkRepositoryImpl implements ContentChunkRepositoryCustom 
                     .append("OR LOWER(COALESCE(s.context#>>'{sectionKey}', '')) = :sectionKeyExact ")
                     .append("OR LOWER(COALESCE(s.context#>>'{facets,sectionKey}', '')) = :sectionKeyExact ")
                     .append("OR LOWER(COALESCE(s.context#>>'{envelope,sectionKey}', '')) = :sectionKeyExact ")
-                    .append("OR LOWER(COALESCE(c.source_field, '')) LIKE :sectionKey)")
-            ;
+                    .append("OR LOWER(COALESCE(c.source_field, '')) LIKE :sectionKey)");
             params.put("sectionKey", "%" + loweredKey + "%"); // BOTH-SIDES WILDCARD
             params.put("sectionKeyExact", loweredKey);
         }
@@ -94,7 +100,8 @@ public class ContentChunkRepositoryImpl implements ContentChunkRepositoryCustom 
     /**
      * Appends JSONB query predicates for context map filters.
      */
-    private void buildJsonbQueries(Map<String, Object> map, List<String> path, StringBuilder sql, Map<String, Object> params) {
+    private void buildJsonbQueries(Map<String, Object> map, List<String> path, StringBuilder sql,
+            Map<String, Object> params) {
         for (Map.Entry<String, Object> entry : map.entrySet()) {
             List<String> newPath = new ArrayList<>(path);
             newPath.add(entry.getKey());
@@ -109,7 +116,8 @@ public class ContentChunkRepositoryImpl implements ContentChunkRepositoryCustom 
                 // Handle string and other scalar values (locale, country, language, etc.)
                 String pathString = "{" + String.join(",", newPath) + "}";
                 String paramName = String.join("_", newPath);
-                sql.append(" AND LOWER(COALESCE(s.context#>>'").append(pathString).append("', '')) = LOWER(:").append(paramName).append(")");
+                sql.append(" AND LOWER(COALESCE(s.context#>>'").append(pathString).append("', '')) = LOWER(:")
+                        .append(paramName).append(")");
                 params.put(paramName, entry.getValue().toString());
             }
         }

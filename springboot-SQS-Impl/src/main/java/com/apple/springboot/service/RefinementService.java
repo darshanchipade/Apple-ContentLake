@@ -2,8 +2,8 @@ package com.apple.springboot.service;
 
 import com.apple.springboot.model.ConsolidatedEnrichedSection;
 import com.apple.springboot.model.ContentChunkWithDistance;
+import com.apple.springboot.model.ParsedQuery;
 import com.apple.springboot.model.RefinementChip;
-import com.apple.springboot.repository.ConsolidatedEnrichedSectionRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,115 +28,89 @@ public class RefinementService {
     @Autowired
     private ObjectMapper objectMapper;
 
-    @Autowired
-    private ConsolidatedEnrichedSectionRepository consolidatedRepo;
-
-    private static final Pattern SECTION_KEY_PATTERN =
-            Pattern.compile("(?i)\\b([a-z0-9]+(?:-[a-z0-9]+)*)-section(?:-[a-z0-9]+)*\\b");
-    private static final double SECTION_KEY_SCORE_WEIGHT = 0.2;
-    private static final double ROLE_HINT_SCORE_WEIGHT = 0.15;
-    private static final Set<String> ROLE_STOP_WORDS = Set.of(
-            "section",
-            "sections",
-            "for",
-            "of",
-            "in",
-            "on",
-            "and",
-            "the",
-            "a",
-            "an",
-            "to",
-            "with"
-    );
+    private static final Pattern SECTION_KEY_PATTERN = Pattern
+            .compile("(?i)\\b([a-z0-9]+(?:-[a-z0-9]+)*)-section(?:-[a-z0-9]+)*\\b");
 
     /**
      * Generates refinement chips by analyzing semantically similar content chunks.
      */
-    public List<RefinementChip> getRefinementChips(String query) throws IOException {
-        return getRefinementChips(query, DEFAULT_CHIP_LIMIT);
+    public List<RefinementChip> getRefinementChips(ParsedQuery parsedQuery) throws IOException {
+        return getRefinementChips(parsedQuery, DEFAULT_CHIP_LIMIT);
     }
 
     /**
      * Generates refinement chips with a requested limit.
      */
-    public List<RefinementChip> getRefinementChips(String query, Integer limit) throws IOException {
-        // Perform a semantic search across a broader candidate set for chip coverage.
+    public List<RefinementChip> getRefinementChips(ParsedQuery parsedQuery, Integer limit) throws IOException {
+        String queryStr = parsedQuery.getQuery();
+        String fieldName = parsedQuery.getOriginalFieldName();
+        List<String> tags = parsedQuery.getTags();
+        List<String> keywords = parsedQuery.getKeywords();
+        Map<String, Object> context = parsedQuery.getContextMap();
+        String sectionFilter = parsedQuery.getSectionKeyFilter();
+
         Double threshold = null;
         int chipLimit = normalizeLimit(limit);
         int initialLimit = Math.min(Math.max(50, chipLimit * 6), 200);
-        List<ContentChunkWithDistance> initialChunks = vectorSearchService.search(query, null, initialLimit, null, null, null, threshold, null);
 
-        if (initialChunks.isEmpty()) {
-            return Collections.emptyList();
-        }
+        List<ContentChunkWithDistance> initialChunks = vectorSearchService.search(
+                queryStr, fieldName, initialLimit, tags, keywords, context, threshold, sectionFilter);
 
         Map<RefinementChip, Double> chipScores = new HashMap<>();
 
-        for (ContentChunkWithDistance chunkWithDistance : initialChunks) {
-            double distance = chunkWithDistance.getDistance();
-            double score = similarityFromDistance(distance);
-            if (score <= 0) continue;
+        if (initialChunks != null && !initialChunks.isEmpty()) {
+            for (ContentChunkWithDistance chunkWithDistance : initialChunks) {
+                double distance = chunkWithDistance.getDistance();
+                double score = similarityFromDistance(distance);
+                if (score <= 0)
+                    continue;
 
-            ConsolidatedEnrichedSection section = chunkWithDistance.getContentChunk().getConsolidatedEnrichedSection();
-            if (section == null) continue;
+                ConsolidatedEnrichedSection section = chunkWithDistance.getContentChunk()
+                        .getConsolidatedEnrichedSection();
+                if (section == null)
+                    continue;
 
-            String originalFieldName = section.getOriginalFieldName();
-            if (StringUtils.hasText(originalFieldName)) {
-                RefinementChip chip = new RefinementChip(originalFieldName.trim(), "sectionName", 0);
-                chipScores.merge(chip, score, Double::sum);
-            }
-            String sectionKey = extractSectionKeyFromSection(section);
-            if (StringUtils.hasText(sectionKey)) {
-                RefinementChip chip = new RefinementChip(sectionKey, "sectionKey", 0);
-                chipScores.merge(chip, score, Double::sum);
-            }
-
-            // Extract Tags
-            if (section.getTags() != null) {
-                section.getTags().forEach(tag -> {
-                    RefinementChip chip = new RefinementChip(tag, "Tag", 0);
+                String originalFieldName = section.getOriginalFieldName();
+                if (StringUtils.hasText(originalFieldName)) {
+                    RefinementChip chip = new RefinementChip(originalFieldName.trim(), "sectionName", 0);
                     chipScores.merge(chip, score, Double::sum);
-                });
-            }
-            // Extract Keywords
-            if (section.getKeywords() != null) {
-                section.getKeywords().forEach(keyword -> {
-                    RefinementChip chip = new RefinementChip(keyword, "Keyword", 0);
+                }
+                String sectionKey = extractSectionKeyFromSection(section);
+                if (StringUtils.hasText(sectionKey)) {
+                    RefinementChip chip = new RefinementChip(sectionKey, "sectionKey", 0);
                     chipScores.merge(chip, score, Double::sum);
-                });
+                }
+
+                // Extract Tags
+                if (section.getTags() != null) {
+                    section.getTags().forEach(tag -> {
+                        RefinementChip chip = new RefinementChip(tag, "Tag", 0);
+                        chipScores.merge(chip, score, Double::sum);
+                    });
+                }
+                // Extract Keywords
+                if (section.getKeywords() != null) {
+                    section.getKeywords().forEach(keyword -> {
+                        RefinementChip chip = new RefinementChip(keyword, "Keyword", 0);
+                        chipScores.merge(chip, score, Double::sum);
+                    });
+                }
+
+                // Extract from nested context based on simplified requirements
+                if (section.getContext() != null) {
+                    JsonNode contextNode = objectMapper.valueToTree(section.getContext());
+                    extractContextChips(contextNode.path("facets"), List.of("sectionKey", "sectionName", "eventType"),
+                            "facets", chipScores, score);
+                    extractContextChips(contextNode.path("envelope"), List.of("sectionName", "locale", "country"),
+                            "envelope", chipScores, score);
+                }
             }
-
-            // Extract from nested context based on simplified requirements
-            if (section.getContext() != null) {
-                JsonNode contextNode = objectMapper.valueToTree(section.getContext());
-                extractContextChips(contextNode.path("facets"), List.of("sectionKey", "sectionName", "eventType"), "facets", chipScores, score);
-                extractContextChips(contextNode.path("envelope"), List.of("sectionName", "locale", "country"), "envelope", chipScores, score);
-            }
-        }
-
-        List<ConsolidatedEnrichedSection> supplementalSections = loadSectionsForQuery(query);
-        if (!supplementalSections.isEmpty()) {
-            mergeChipsFromSections(supplementalSections, chipScores, SECTION_KEY_SCORE_WEIGHT);
-        }
-
-        Set<String> sectionKeys = extractSectionKeys(query);
-        for (String sectionKey : sectionKeys) {
-            RefinementChip chip = new RefinementChip(sectionKey, "sectionKey", 0);
-            chipScores.merge(chip, SECTION_KEY_SCORE_WEIGHT, Double::sum);
-        }
-
-        Set<String> roleHints = extractRoleHints(query, sectionKeys);
-        for (String roleHint : roleHints) {
-            RefinementChip chip = new RefinementChip(roleHint, "sectionName", 0);
-            chipScores.merge(chip, ROLE_HINT_SCORE_WEIGHT, Double::sum);
         }
 
         // Get the count for each chip for display
-        Map<RefinementChip, Long> chipCounts = mergeForCounting(initialChunks, supplementalSections).stream()
+        Map<RefinementChip, Long> chipCounts = mergeForCounting(initialChunks, Collections.emptyList()).stream()
                 .flatMap(section -> extractChipsForCounting(section).stream())
                 .collect(Collectors.groupingBy(chip -> chip, Collectors.counting()));
-
 
         List<RefinementChip> sortedChips = chipScores.entrySet().stream()
                 .sorted(Map.Entry.<RefinementChip, Double>comparingByValue().reversed())
@@ -149,20 +123,44 @@ public class RefinementService {
         List<RefinementChip> limited = new ArrayList<>(sortedChips.stream().limit(chipLimit).toList());
         ensureTypeIncluded(limited, sortedChips, "sectionName", chipLimit);
         ensureTypeIncluded(limited, sortedChips, "sectionKey", chipLimit);
-        for (String sectionKey : sectionKeys) {
-            ensureValueIncluded(limited, sortedChips, "sectionKey", sectionKey, chipLimit);
+
+        if (sectionFilter != null) {
+            ensureValueIncluded(limited, sortedChips, "sectionKey", sectionFilter, chipLimit);
         }
-        for (String roleHint : roleHints) {
-            ensureValueIncluded(limited, sortedChips, "sectionName", roleHint, chipLimit);
+        if (fieldName != null) {
+            ensureValueIncluded(limited, sortedChips, "sectionName", fieldName, chipLimit);
         }
+        if (tags != null) {
+            tags.forEach(tag -> ensureValueIncluded(limited, sortedChips, "Tag", tag, chipLimit));
+        }
+        if (keywords != null) {
+            keywords.forEach(keyword -> ensureValueIncluded(limited, sortedChips, "Keyword", keyword, chipLimit));
+        }
+        if (context != null) {
+            context.forEach((key, value) -> {
+                if (value instanceof String) {
+                    if ("sectionName".equals(key)) {
+                        // In the Next.js UI, type="sectionName" is treated specially (as part of
+                        // facets.sectionName)
+                        ensureValueIncluded(limited, sortedChips, "sectionName", (String) value, chipLimit);
+                    } else {
+                        // Otherwise it's a generic context path
+                        ensureValueIncluded(limited, sortedChips, "Context:envelope." + key, (String) value, chipLimit);
+                    }
+                }
+            });
+        }
+
         return limited;
     }
 
     /**
      * Adds context-driven refinement chips to the score map.
      */
-    private void extractContextChips(JsonNode parentNode, List<String> keys, String pathPrefix, Map<RefinementChip, Double> chipScores, double score) {
-        if (parentNode.isMissingNode()) return;
+    private void extractContextChips(JsonNode parentNode, List<String> keys, String pathPrefix,
+            Map<RefinementChip, Double> chipScores, double score) {
+        if (parentNode.isMissingNode())
+            return;
 
         for (String key : keys) {
             JsonNode valueNode = parentNode.path(key);
@@ -193,8 +191,10 @@ public class RefinementService {
         }
         if (section.getContext() != null) {
             JsonNode contextNode = objectMapper.valueToTree(section.getContext());
-            extractContextChipsForCounting(contextNode.path("facets"), List.of("sectionKey", "sectionName", "sectionModel", "eventType"), "facets", chips);
-            extractContextChipsForCounting(contextNode.path("envelope"), List.of("sectionName", "locale", "country"), "envelope", chips);
+            extractContextChipsForCounting(contextNode.path("facets"),
+                    List.of("sectionKey", "sectionName", "sectionModel", "eventType"), "facets", chips);
+            extractContextChipsForCounting(contextNode.path("envelope"), List.of("sectionName", "locale", "country"),
+                    "envelope", chips);
         }
         return chips;
     }
@@ -202,8 +202,10 @@ public class RefinementService {
     /**
      * Appends context chips to a list for count aggregation.
      */
-    private void extractContextChipsForCounting(JsonNode parentNode, List<String> keys, String pathPrefix, List<RefinementChip> chips) {
-        if (parentNode.isMissingNode()) return;
+    private void extractContextChipsForCounting(JsonNode parentNode, List<String> keys, String pathPrefix,
+            List<RefinementChip> chips) {
+        if (parentNode.isMissingNode())
+            return;
 
         for (String key : keys) {
             JsonNode valueNode = parentNode.path(key);
@@ -211,73 +213,6 @@ public class RefinementService {
                 chips.add(new RefinementChip(valueNode.asText(), "Context:" + pathPrefix + "." + key, 0));
             }
         }
-    }
-
-    /**
-     * Loads sections that match section keys extracted from the query.
-     */
-    private List<ConsolidatedEnrichedSection> loadSectionsForQuery(String query) {
-        if (!StringUtils.hasText(query)) {
-            return List.of();
-        }
-        Set<String> sectionKeys = extractSectionKeys(query);
-        if (sectionKeys.isEmpty()) {
-            return List.of();
-        }
-        List<ConsolidatedEnrichedSection> matched = new ArrayList<>();
-        for (String key : sectionKeys) {
-            matched.addAll(consolidatedRepo.findBySectionKey(key, 200));
-        }
-        return matched;
-    }
-
-    /**
-     * Extracts section keys from the raw query text.
-     */
-    private Set<String> extractSectionKeys(String query) {
-        Set<String> keys = new LinkedHashSet<>();
-        Matcher matcher = SECTION_KEY_PATTERN.matcher(query);
-        while (matcher.find()) {
-            String key = matcher.group(0);
-            if (StringUtils.hasText(key)) {
-                keys.add(key.toLowerCase(Locale.ROOT));
-            }
-        }
-        return keys;
-    }
-
-    /**
-     * Extracts role hints from the query text (e.g., "headline").
-     */
-    private Set<String> extractRoleHints(String query, Set<String> sectionKeys) {
-        if (!StringUtils.hasText(query)) {
-            return Set.of();
-        }
-        Set<String> hints = new LinkedHashSet<>();
-        String[] tokens = query.split("\\s+");
-        for (String token : tokens) {
-            if (!StringUtils.hasText(token)) {
-                continue;
-            }
-            String cleaned = token.replaceAll("[^A-Za-z0-9_-]", "").toLowerCase(Locale.ROOT);
-            if (!StringUtils.hasText(cleaned)) {
-                continue;
-            }
-            if (sectionKeys != null && sectionKeys.contains(cleaned)) {
-                continue;
-            }
-            if (cleaned.endsWith("-section")) {
-                continue;
-            }
-            if (cleaned.length() < 3) {
-                continue;
-            }
-            if (ROLE_STOP_WORDS.contains(cleaned)) {
-                continue;
-            }
-            hints.add(cleaned);
-        }
-        return hints;
     }
 
     /**
@@ -345,31 +280,10 @@ public class RefinementService {
     }
 
     /**
-     * Adds chips from matching sections with a base score weight.
-     */
-    private void mergeChipsFromSections(List<ConsolidatedEnrichedSection> sections,
-                                        Map<RefinementChip, Double> chipScores,
-                                        double weight) {
-        if (sections == null || sections.isEmpty()) {
-            return;
-        }
-        double score = Math.max(0.01, weight);
-        for (ConsolidatedEnrichedSection section : sections) {
-            if (section == null) {
-                continue;
-            }
-            List<RefinementChip> chips = extractChipsForCounting(section);
-            for (RefinementChip chip : chips) {
-                chipScores.merge(chip, score, Double::sum);
-            }
-        }
-    }
-
-    /**
      * Merges sections from vector results and supplemental matches for counting.
      */
     private List<ConsolidatedEnrichedSection> mergeForCounting(List<ContentChunkWithDistance> initialChunks,
-                                                               List<ConsolidatedEnrichedSection> supplementalSections) {
+            List<ConsolidatedEnrichedSection> supplementalSections) {
         LinkedHashMap<UUID, ConsolidatedEnrichedSection> merged = new LinkedHashMap<>();
         if (initialChunks != null) {
             for (ContentChunkWithDistance chunk : initialChunks) {
@@ -405,9 +319,9 @@ public class RefinementService {
      * Ensures at least one chip of the requested type appears in the limited list.
      */
     private void ensureTypeIncluded(List<RefinementChip> limited,
-                                    List<RefinementChip> sortedChips,
-                                    String type,
-                                    int limit) {
+            List<RefinementChip> sortedChips,
+            String type,
+            int limit) {
         if (limited == null || sortedChips == null || type == null) {
             return;
         }
@@ -433,10 +347,10 @@ public class RefinementService {
      * Ensures a specific chip value is present when derived from the query.
      */
     private void ensureValueIncluded(List<RefinementChip> limited,
-                                     List<RefinementChip> sortedChips,
-                                     String type,
-                                     String value,
-                                     int limit) {
+            List<RefinementChip> sortedChips,
+            String type,
+            String value,
+            int limit) {
         if (limited == null || sortedChips == null || type == null || value == null) {
             return;
         }
@@ -456,13 +370,15 @@ public class RefinementService {
             limited.set(limited.size() - 1, candidate);
         }
     }
+
     /**
      * Converts a vector distance into a normalized similarity score.
      */
     private double similarityFromDistance(double d) {
         // Works for Euclidean distance: in (0, +inf)
         // Maps to (0,1]; closer → higher similarity.
-        if (Double.isNaN(d) || d < 0) return 0.0;
+        if (Double.isNaN(d) || d < 0)
+            return 0.0;
         return 1.0 / (1.0 + d);
     }
 }

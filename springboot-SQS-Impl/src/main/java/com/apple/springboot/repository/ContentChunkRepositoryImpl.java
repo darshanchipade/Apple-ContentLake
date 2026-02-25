@@ -42,12 +42,12 @@ public class ContentChunkRepositoryImpl implements ContentChunkRepositoryCustom 
         }
         if (originalFieldName != null && !originalFieldName.isBlank()) {
             sql.append(" AND (")
-                    .append("LOWER(COALESCE(s.original_field_name, '')) = LOWER(:originalFieldName) ")
-                    .append("OR LOWER(COALESCE(s.context#>>'{facets,sectionName}', '')) = LOWER(:originalFieldName) ")
-                    .append("OR LOWER(COALESCE(s.context#>>'{envelope,sectionName}', '')) = LOWER(:originalFieldName) ")
-                    .append("OR LOWER(COALESCE(s.context#>>'{sectionName}', '')) = LOWER(:originalFieldName)")
+                    .append("LOWER(COALESCE(s.original_field_name, '')) LIKE :originalFieldNameMatch ")
+                    .append("OR LOWER(COALESCE(s.context#>>'{facets,sectionName}', '')) LIKE :originalFieldNameMatch ")
+                    .append("OR LOWER(COALESCE(s.context#>>'{envelope,sectionName}', '')) LIKE :originalFieldNameMatch ")
+                    .append("OR LOWER(COALESCE(s.context#>>'{sectionName}', '')) LIKE :originalFieldNameMatch")
                     .append(")");
-            params.put("originalFieldName", originalFieldName);
+            params.put("originalFieldNameMatch", "%" + originalFieldName.toLowerCase() + "%");
         }
         if (tags != null && tags.length > 0) {
             sql.append(" AND s.tags @> CAST(:tags AS text[])");

@@ -56,10 +56,20 @@ public class QueryParsingService {
             return "headline";
         } else if (lowerQuery.matches(".*\\b(image|picture|img)\\b.*")) {
             return "image";
-        } else if (lowerQuery.matches(".*\\b(copy|text)\\b.*")) {
+        } else if (lowerQuery.matches(".*\\b(copy|text)\\b.*") && !lowerQuery.contains("accessibilityText")) {
             return "copy";
         } else if (lowerQuery.matches(".*\\b(cta|button|btn)\\b.*")) {
             return "cta";
+        }
+
+        // Dynamically detect any camelCase word (e.g., accessibilityText, anyNewKey) as
+        // a schema key hint
+        java.util.regex.Matcher camelCaseMatcher = java.util.regex.Pattern.compile("\\b([a-z]+[A-Z][a-zA-Z]*)\\b")
+                .matcher(rawQuery);
+        if (camelCaseMatcher.find()) {
+            return camelCaseMatcher.group(1);
+        } else if (lowerQuery.matches(".*\\b(analytics)\\b.*")) {
+            return "analytics";
         }
         return null;
     }
@@ -81,18 +91,22 @@ public class QueryParsingService {
                 "  NOTE: These are just examples. Do NOT treat them as a hardcoded exhaustive list. The user could ask for any conceptual UI element.\n\n"
                 +
                 "3. UI ELEMENTS / CONTENT FIELDS\n" +
-                "- If the user asks for any conceptual UI element (like those in the examples above):\n"
+                "- If the user asks for a conceptual UI element (like those in the examples above):\n"
                 +
                 "  -> DO NOT put it in \"originalFieldName\".\n" +
                 "  -> Map it into contextMap.uiElement.\n" +
                 "  -> Format the value as lowercase hyphenated if multiple words.\n"
                 +
-                (uiElementHint != null
-                        ? "- HINT: The user is likely asking for the UI element: \"" + uiElementHint
-                                + "\". If appropriate, map this into contextMap.uiElement.\n\n"
-                        : "\n")
+                "- IMPORTANT: If the user explicitly provides an exact schema key (e.g., any camelCase word like \"accessibilityText\" or \"anyNewKey\", or specific backend keys like \"analytics\"):\n"
                 +
-                "- Only use \"originalFieldName\" if the user explicitly requests a raw backend database schema key.\n\n"
+                "  -> Put it in \"originalFieldName\" exactly as typed (do not hyphenate or lowercase it).\n"
+                +
+                "  -> DO NOT put it in contextMap.uiElement.\n\n"
+                +
+                (uiElementHint != null
+                        ? "- HINT: The user is likely asking for the data field: \"" + uiElementHint
+                                + "\". If it is camelCase or a schema key, map it to originalFieldName. Otherwise, map it to contextMap.uiElement.\n\n"
+                        : "\n")
                 +
                 "4. SECTION FILTERS\n" +
                 "- If the user specifies a page Section (as defined above):\n" +
@@ -100,12 +114,14 @@ public class QueryParsingService {
                 "  -> Store it in \"sectionKeyFilter\"\n" +
                 "  -> DO NOT put page section names inside contextMap.\n\n" +
                 "5. HANDLING BOTH CONCURRENTLY\n" +
-                "- If the query contains BOTH a UI element AND a page Section (e.g. \"[UI element] for [Section]\"), map the UI element to contextMap.uiElement, and map the Section to sectionKeyFilter.\n\n"
+                "- If the query contains BOTH a UI element AND a page Section, map the UI element to contextMap.uiElement (or originalFieldName if it is an exact schema key), and map the Section to sectionKeyFilter.\n\n"
                 +
                 "6. COUNTRY / LOCALE\n" +
-                "- If the user mentions a country, map it to contextMap.country using a standard country code.\n"
+                "- If the user mentions a country, map it to contextMap.country using a standard 2-letter country code (e.g., \"DE\" for Germany).\n"
                 +
-                "- If a locale is mentioned, map it to contextMap.locale.\n\n" +
+                "- IMPORTANT: If the user mentions a country or region, you MUST also intelligently deduce and populate contextMap.locale with the standard locale format (e.g., \"de_DE\" for Germany, \"en_US\" for USA, \"fr_FR\" for France).\n"
+                +
+                "- If a locale is explicitly mentioned, map it directly to contextMap.locale.\n\n" +
                 "7. TAGS & KEYWORDS\n" +
                 "- Extract explicit tags or important keywords only if clearly mentioned. Do not put UI elements or Sections here.\n\n"
                 +

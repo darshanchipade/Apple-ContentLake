@@ -10,7 +10,7 @@ OUTPUT REQUIREMENTS
   * pageId: lowercase single token (e.g., "ipad", "iphone").
   * role: lowercase identifier for the requested content field (e.g., "headline", "inlineHeader").
   * locale: if both language and country are known, format as "ll_CC" (e.g., "en_US"); otherwise keep it as an empty string but still include the envelope with language/country hints.
-  * language: ISO 639-1 lowercase (e.g., "en"). If only spelled-out language is given ("English"), map to ISO code.
+  * language: ISO 639-1 lowercase (e.g., "en"). If only spelled-out language is explicitly given ("English"), map to ISO code.
   * country: ISO 3166-1 alpha-2 uppercase (e.g., "US"). Accept both country names and abbreviations.
 - tags and keywords must be arrays of lowercase strings without duplicates.
 - context should be an object with best-effort structure, typically:
@@ -30,9 +30,14 @@ OUTPUT REQUIREMENTS
 - rawQuery should capture the remaining user intent after removing obvious metadata words ("give me", "show", etc.) and trimming whitespace. If unclear, return the original user message.
 
 REFERENCE KNOWLEDGE
-- Users often mention product or page identifiers (e.g., "iPad", "watch") that map to pageId.
-- Section keys often end with "-section"; section names can be title-case or natural phrases.
+- Users often mention product or page identifiers (e.g., "iPad", "Watch", "MacBook", "iPhone") that map to `pageId`. Always extract this into `pageId`.
+- Section concepts (like "product tile", "hero", "ribbon") SHOULD map to `sectionKey` and ALWAYS append the suffix "-section" (e.g., "product-tile-section").
+- **CRITICAL RULE**: Do NOT mistake generic topics (like "accessibility", "features", "specs") for a `sectionKey` or `sectionName` unless the user explicitly types the word "section". If it is just a general topic (e.g., "accessibility for japan"), leave `sectionKey` and `sectionName` completely empty.
+- **CRITICAL RULE**: Do NOT mistake generic filler conversational words (e.g., "all the content", "show me everything", "give me", "find") as part of the `sectionName` or `sectionKey`. For example, "all the content ribbon section" should ONLY extract "ribbon" as the `sectionName` and "ribbon-section" as the `sectionKey`.
+- Explicitly map specific UI elements or granular content requests (e.g., "image", "picture", "headline", "title", "copy", "button") into the `role` field.
+- **CRITICAL RULE**: Do NOT map generalized modifiers or topic-based text queries (e.g., "accessibility text", "legal text", "feature description") into the `role` field. The `role` field is STRICTLY for the structural UI element name (like "headline" or "image"). Ensure topical words (like "accessibility") remain only in `rawQuery` and `keywords`.
 - Locale hints can appear as "en_US", "US", "United States", "English", etc.
+- **CRITICAL RULE**: Do NOT output a `language`, `locale`, or `country` just because the user's message is written in English. ONLY output geography or language fields if the user EXPLICITLY asks for a specific region or language (e.g., "for Japan", "in French", "for USA"). If no geography is explicitly mentioned, these fields MUST be empty strings.
 - When multiple candidates are present, choose the one most strongly implied by the text; if genuinely ambiguous, prefer leaving it blank.
 
 INPUT

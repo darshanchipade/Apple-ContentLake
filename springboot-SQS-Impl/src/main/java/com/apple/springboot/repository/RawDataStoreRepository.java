@@ -14,20 +14,34 @@ public interface RawDataStoreRepository extends JpaRepository<RawDataStore, UUID
      * Finds raw data by source URI.
      */
     Optional<RawDataStore> findBySourceUri(String sourceUri);
+
     /**
      * Finds raw data by content hash.
      */
     Optional<RawDataStore> findByContentHash(String contentHash);
+
     /**
      * Finds raw data by source URI and content hash.
      */
     Optional<RawDataStore> findBySourceUriAndContentHash(String sourceUri, String contentHash);
+
     /**
      * Loads the latest raw data version for a source URI.
      */
     Optional<RawDataStore> findTopBySourceUriOrderByVersionDesc(String sourceUri);
+
+    /**
+     * Loads the latest raw data version for a logical key.
+     */
+    Optional<RawDataStore> findTopByLogicalKeyOrderByVersionDesc(String logicalKey);
+
     /**
      * Loads the previous raw data version for a source URI.
      */
     Optional<RawDataStore> findTopBySourceUriAndVersionLessThanOrderByVersionDesc(String sourceUri, Integer version);
+
+    /**
+     * Loads the previous raw data version for a logical key.
+     */
+    Optional<RawDataStore> findTopByLogicalKeyAndVersionLessThanOrderByVersionDesc(String logicalKey, Integer version);
 }

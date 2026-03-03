@@ -30,7 +30,7 @@ public class ConsolidatedEnrichedSection {
     @Column(name = "cleansed_data_id", nullable = false)
     private UUID cleansedDataId;
 
-    @Column(name = "original_field_name")
+    @Column(name = "original_field_name", columnDefinition = "TEXT")
     private String originalFieldName;
 
     @JdbcTypeCode(SqlTypes.JSON)
@@ -43,7 +43,7 @@ public class ConsolidatedEnrichedSection {
     @Column(name = "source_uri", columnDefinition = "TEXT")
     private String sourceUri;
 
-    @Column(name = "section_path")
+    @Column(name = "section_path", columnDefinition = "TEXT")
     private String sectionPath;
 
     @Column(name = "summary", columnDefinition = "TEXT")
@@ -85,8 +85,7 @@ public class ConsolidatedEnrichedSection {
     @Column(name = "version")
     private Integer version;
 
-    @Column(name = "content_hash")
+    @Column(name = "content_hash", columnDefinition = "TEXT")
     private String contentHash;
-
 
 }

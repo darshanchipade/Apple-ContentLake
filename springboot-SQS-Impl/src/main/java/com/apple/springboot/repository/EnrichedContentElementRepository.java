@@ -14,33 +14,55 @@ public interface EnrichedContentElementRepository extends JpaRepository<Enriched
      * Counts elements for a cleansed data record.
      */
     long countByCleansedDataId(UUID cleansedDataId);
+
     /**
      * Loads all elements for a cleansed data record.
      */
     List<EnrichedContentElement> findAllByCleansedDataId(UUID cleansedDataId);
+
     /**
      * Checks for an element by logical key and cleansed text.
      */
-    boolean existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(String sourcePath, String fieldName, String cleansedText);
+    boolean existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(String sourcePath, String fieldName,
+            String cleansedText);
+
+    /**
+     * Checks for an element globally across all paths by field name and cleansed
+     * text.
+     */
+    boolean existsByItemOriginalFieldNameAndCleansedText(String fieldName, String cleansedText);
+
     /**
      * Checks for an element by logical key and content hash.
      */
-    boolean existsByItemSourcePathAndItemOriginalFieldNameAndContentHash(String sourcePath, String fieldName, String contentHash);
+    boolean existsByItemSourcePathAndItemOriginalFieldNameAndContentHash(String sourcePath, String fieldName,
+            String contentHash);
+
+    /**
+     * Checks for an element globally across all paths by field name and content
+     * hash.
+     */
+    boolean existsByItemOriginalFieldNameAndContentHash(String fieldName, String contentHash);
 
     /**
      * Checks for an element by source URI, key, and content hash.
      */
-    boolean existsBySourceUriAndItemSourcePathAndItemOriginalFieldNameAndContentHash(String sourceUri, String sourcePath, String fieldName, String contentHash);
+    boolean existsBySourceUriAndItemSourcePathAndItemOriginalFieldNameAndContentHash(String sourceUri,
+            String sourcePath, String fieldName, String contentHash);
+
     /**
      * Checks for an element by source URI, key, and cleansed text.
      */
-    boolean existsBySourceUriAndItemSourcePathAndItemOriginalFieldNameAndCleansedText(String sourceUri, String sourcePath, String fieldName, String cleansedText);
+    boolean existsBySourceUriAndItemSourcePathAndItemOriginalFieldNameAndCleansedText(String sourceUri,
+            String sourcePath, String fieldName, String cleansedText);
 
     /**
      * Finds an existing element based on its logical key to prevent duplicates.
      * This is the correct method signature.
      */
-    Optional<EnrichedContentElement> findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(UUID cleansedDataId, String sourcePath, String fieldName);
+    Optional<EnrichedContentElement> findByCleansedDataIdAndItemSourcePathAndItemOriginalFieldName(UUID cleansedDataId,
+            String sourcePath, String fieldName);
+
     /**
      * Loads elements ordered by enrichment time.
      */

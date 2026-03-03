@@ -50,13 +50,13 @@ export const extractLocaleAndPageId = (
   let pageId: string | undefined;
 
   while (stack.length && visited.size < MAX_NODES && (!locale || !pageId)) {
-    const current = stack.pop();
+    const current = stack.shift();
     if (!current || typeof current !== "object") continue;
     if (visited.has(current as object)) continue;
     visited.add(current as object);
 
     if (Array.isArray(current)) {
-      for (let index = current.length - 1; index >= 0; index -= 1) {
+      for (let index = 0; index < current.length; index += 1) {
         const entry = current[index];
         if (entry && typeof entry === "object") {
           stack.push(entry);

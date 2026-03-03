@@ -43,7 +43,7 @@ public class RawDataStore {
 
     /**
      * -- GETTER --
-     *  Returns the payload content hash.
+     * Returns the payload content hash.
      */
     @Getter
     @Column(name = "content_hash", columnDefinition = "TEXT")
@@ -51,7 +51,7 @@ public class RawDataStore {
 
     /**
      * -- GETTER --
-     *  Returns the content type of the stored payload.
+     * Returns the content type of the stored payload.
      */
     @Getter
     @Column(name = "source_content_type", columnDefinition = "TEXT")
@@ -59,7 +59,7 @@ public class RawDataStore {
 
     /**
      * -- GETTER --
-     *  Returns the version number for this source URI.
+     * Returns the version number for this source URI.
      */
     @Getter
     @Column(name = "version")
@@ -69,60 +69,89 @@ public class RawDataStore {
     private Boolean latest = true;
 
     /**
+     * -- GETTER --
+     * Returns the logical business key (e.g., tenant|pageId|locale) to group
+     * versions regardless of transport channel.
+     */
+    @Getter
+    @Column(name = "logical_key", columnDefinition = "TEXT")
+    private String logicalKey;
+
+    /**
      * Default constructor for JPA.
      */
-    public RawDataStore() {}
+    public RawDataStore() {
+    }
 
     /**
      * Sets the primary key ID.
      */
-    public void setId(UUID id) { this.id = id; }
+    public void setId(UUID id) {
+        this.id = id;
+    }
 
     /**
      * Sets the source URI associated with this payload.
      */
-    public void setSourceUri(String sourceUri) { this.sourceUri = sourceUri; }
+    public void setSourceUri(String sourceUri) {
+        this.sourceUri = sourceUri;
+    }
 
     /**
      * Sets the raw text payload.
      */
-    public void setRawContentText(String rawContentText) { this.rawContentText = rawContentText; }
+    public void setRawContentText(String rawContentText) {
+        this.rawContentText = rawContentText;
+    }
 
     /**
      * Sets the raw binary payload.
      */
-    public void setRawContentBinary(byte[] rawContentBinary) { this.rawContentBinary = rawContentBinary; }
+    public void setRawContentBinary(byte[] rawContentBinary) {
+        this.rawContentBinary = rawContentBinary;
+    }
 
     /**
      * Sets the extracted source metadata JSON.
      */
-    public void setSourceMetadata(String sourceMetadata) { this.sourceMetadata = sourceMetadata; }
+    public void setSourceMetadata(String sourceMetadata) {
+        this.sourceMetadata = sourceMetadata;
+    }
 
     /**
      * Sets optional metadata supplied by the upload request.
      */
-    public void setSourceRequestMetadata(String sourceRequestMetadata) { this.sourceRequestMetadata = sourceRequestMetadata; }
+    public void setSourceRequestMetadata(String sourceRequestMetadata) {
+        this.sourceRequestMetadata = sourceRequestMetadata;
+    }
 
     /**
      * Sets the timestamp when the payload was received.
      */
-    public void setReceivedAt(OffsetDateTime receivedAt) { this.receivedAt = receivedAt; }
+    public void setReceivedAt(OffsetDateTime receivedAt) {
+        this.receivedAt = receivedAt;
+    }
 
     /**
      * Sets the ingestion status for this payload.
      */
-    public void setStatus(String status) { this.status = status; }
+    public void setStatus(String status) {
+        this.status = status;
+    }
 
     /**
      * Sets the payload content hash.
      */
-    public void setContentHash(String contentHash) { this.contentHash = contentHash; }
+    public void setContentHash(String contentHash) {
+        this.contentHash = contentHash;
+    }
 
     /**
      * Sets the content type of the stored payload.
      */
-    public void setSourceContentType(String sourceContentType) { this.sourceContentType = sourceContentType; }
-
+    public void setSourceContentType(String sourceContentType) {
+        this.sourceContentType = sourceContentType;
+    }
 
     /**
      * Updates the version number for this source URI.
@@ -143,5 +172,12 @@ public class RawDataStore {
      */
     public void setLatest(Boolean latest) {
         this.latest = latest;
+    }
+
+    /**
+     * Sets the logical business key.
+     */
+    public void setLogicalKey(String logicalKey) {
+        this.logicalKey = logicalKey;
     }
 }

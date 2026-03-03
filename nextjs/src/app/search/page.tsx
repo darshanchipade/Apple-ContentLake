@@ -106,9 +106,9 @@ const buildSearchRequest = (query: string, chips: RefinementChip[]) => {
     } else if (chip.type === "sectionName") {
       if (!request.original_field_name) {
         request.original_field_name = chip.value;
-      } else if (request.original_field_name !== chip.value) {
-        appendContextValue(request.context, ["facets", "sectionName"], chip.value);
       }
+      // If there are multiple sectionName chips, we just take the first one 
+      // rather than incorrectly mapping others into a context array the backend ignores.
     } else if (chip.type === "sectionKey") {
       appendContextValue(request.context, ["facets", "sectionKey"], chip.value);
     } else if (chip.type.startsWith("Context:")) {

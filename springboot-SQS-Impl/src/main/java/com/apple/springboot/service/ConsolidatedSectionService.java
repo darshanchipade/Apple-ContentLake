@@ -29,8 +29,8 @@ public class ConsolidatedSectionService {
      * Builds the service used to consolidate enriched sections.
      */
     public ConsolidatedSectionService(EnrichedContentElementRepository enrichedRepo,
-                                      ConsolidatedEnrichedSectionRepository consolidatedRepo,
-                                      ContentHashRepository contentHashRepository) {
+            ConsolidatedEnrichedSectionRepository consolidatedRepo,
+            ContentHashRepository contentHashRepository) {
         this.enrichedRepo = enrichedRepo;
         this.consolidatedRepo = consolidatedRepo;
         this.contentHashRepository = contentHashRepository;
@@ -42,10 +42,13 @@ public class ConsolidatedSectionService {
     @Transactional
     public void saveFromCleansedEntry(CleansedDataStore cleansedData) {
         List<EnrichedContentElement> enrichedItems = enrichedRepo.findAllByCleansedDataId(cleansedData.getId());
-        logger.info("Found {} enriched items for CleansedDataStore ID: {} to consolidate.", enrichedItems.size(), cleansedData.getId());
+        logger.info("Found {} enriched items for CleansedDataStore ID: {} to consolidate.", enrichedItems.size(),
+                cleansedData.getId());
 
-        // Build an index of all usagePaths per (sourcePath, originalFieldName). We prefer harvesting from
-        // persisted `content_hashes` so consolidation remains correct even when `cleansed_items` only contains deltas.
+        // Build an index of all usagePaths per (sourcePath, originalFieldName). We
+        // prefer harvesting from
+        // persisted `content_hashes` so consolidation remains correct even when
+        // `cleansed_items` only contains deltas.
         Map<String, Set<String>> usageIndex = buildUsageIndex(cleansedData, enrichedItems);
 
         for (EnrichedContentElement item : enrichedItems) {
@@ -60,15 +63,18 @@ public class ConsolidatedSectionService {
             for (String usagePath : usagePaths) {
                 String[] split = splitUsagePath(usagePath);
                 String sectionPath = split[0];
-                String sectionUri  = split[1];
+                String sectionUri = split[1];
 
-                if (sectionPath == null) sectionPath = item.getItemSourcePath();
-                if (sectionUri  == null) sectionUri  = item.getItemSourcePath();
+                if (sectionPath == null)
+                    sectionPath = item.getItemSourcePath();
+                if (sectionUri == null)
+                    sectionUri = item.getItemSourcePath();
 
                 // Prevent duplicate insert within the same version
-                boolean exists = consolidatedRepo.existsBySectionUriAndSectionPathAndOriginalFieldNameAndCleansedTextAndVersion(
-                        sectionUri, sectionPath, item.getItemOriginalFieldName(), item.getCleansedText(), cleansedData.getVersion()
-                );
+                boolean exists = consolidatedRepo
+                        .existsBySectionUriAndSectionPathAndOriginalFieldNameAndCleansedTextAndVersion(
+                                sectionUri, sectionPath, item.getItemOriginalFieldName(), item.getCleansedText(),
+                                cleansedData.getVersion());
 
                 if (!exists) {
                     ConsolidatedEnrichedSection section = new ConsolidatedEnrichedSection();
@@ -82,8 +88,10 @@ public class ConsolidatedSectionService {
 
                     // Prefer hash keyed by usagePath; fall back to legacy two-key lookup if absent
                     contentHashRepository
-                            .findBySourcePathAndItemTypeAndUsagePath(item.getItemSourcePath(), item.getItemOriginalFieldName(), usagePath)
-                            .or(() -> contentHashRepository.findBySourcePathAndItemType(item.getItemSourcePath(), item.getItemOriginalFieldName()))
+                            .findBySourcePathAndItemTypeAndUsagePath(item.getItemSourcePath(),
+                                    item.getItemOriginalFieldName(), usagePath)
+                            .or(() -> contentHashRepository.findBySourcePathAndItemType(item.getItemSourcePath(),
+                                    item.getItemOriginalFieldName()))
                             .ifPresent(contentHash -> section.setContentHash(contentHash.getContentHash()));
 
                     section.setSummary(item.getSummary());
@@ -99,9 +107,12 @@ public class ConsolidatedSectionService {
                     section.setStatus(item.getStatus());
 
                     consolidatedRepo.save(section);
-                    logger.info("Saved new ConsolidatedEnrichedSection ID {} for usagePath '{}' from EnrichedContentElement ID {}", section.getId(), usagePath, item.getId());
+                    logger.info(
+                            "Saved new ConsolidatedEnrichedSection ID {} for usagePath '{}' from EnrichedContentElement ID {}",
+                            section.getId(), usagePath, item.getId());
                 } else {
-                    logger.info("ConsolidatedEnrichedSection already exists for (uri={}, path={}, field={}, ver={}); skipping insert.",
+                    logger.info(
+                            "ConsolidatedEnrichedSection already exists for (uri={}, path={}, field={}, ver={}); skipping insert.",
                             sectionUri, sectionPath, item.getItemOriginalFieldName(), cleansedData.getVersion());
                 }
             }
@@ -141,35 +152,41 @@ public class ConsolidatedSectionService {
      * Splits a usagePath into sectionPath and sectionUri segments.
      */
     private String[] splitUsagePath(String usagePath) {
-        if (usagePath == null || usagePath.isBlank()) return new String[]{null, null};
+        if (usagePath == null || usagePath.isBlank())
+            return new String[] { null, null };
         int idx = usagePath.indexOf(USAGE_REF_DELIM);
-        if (idx < 0) return new String[]{usagePath, usagePath};
+        if (idx < 0)
+            return new String[] { usagePath, usagePath };
         String left = usagePath.substring(0, idx).trim();
         String right = usagePath.substring(idx + USAGE_REF_DELIM.length()).trim();
-        return new String[]{left.isEmpty() ? null : left, right.isEmpty() ? null : right};
+        return new String[] { left.isEmpty() ? null : left, right.isEmpty() ? null : right };
     }
 
     /**
      * Builds a map of usage paths keyed by source path and original field name.
      */
     private Map<String, Set<String>> buildUsageIndex(CleansedDataStore cleansedData,
-                                                     List<EnrichedContentElement> enrichedItems) {
+            List<EnrichedContentElement> enrichedItems) {
         Map<String, Set<String>> index = new HashMap<>();
 
-        // 1) Always include whatever was stored on the cleansed record (could be full or delta).
+        // 1) Always include whatever was stored on the cleansed record (could be full
+        // or delta).
         if (cleansedData != null && cleansedData.getCleansedItems() != null) {
             for (Map<String, Object> item : cleansedData.getCleansedItems()) {
                 try {
                     String sourcePath = (String) item.get("sourcePath");
                     String originalFieldName = (String) item.get("originalFieldName");
                     String usagePath = (String) item.get("usagePath");
-                    if (sourcePath == null || originalFieldName == null || usagePath == null) continue;
+                    if (sourcePath == null || originalFieldName == null || usagePath == null)
+                        continue;
                     index.computeIfAbsent(usageKey(sourcePath, originalFieldName), k -> new HashSet<>()).add(usagePath);
-                } catch (ClassCastException ignored) { /* skip malformed entries */ }
+                } catch (ClassCastException ignored) {
+                    /* skip malformed entries */ }
             }
         }
 
-        // 2) Backfill the full fan-out from `content_hashes` for all enriched items (covers delta-cleansed runs).
+        // 2) Backfill the full fan-out from `content_hashes` for all enriched items
+        // (covers delta-cleansed runs).
         if (enrichedItems == null || enrichedItems.isEmpty()) {
             return index;
         }
@@ -192,7 +209,8 @@ public class ConsolidatedSectionService {
                         .filter(s -> !s.isBlank())
                         .forEach(up -> index.computeIfAbsent(pairKey, k -> new HashSet<>()).add(up));
             } catch (Exception e) {
-                logger.debug("Unable to backfill usage paths from content_hashes for {}::{}, falling back to element context.",
+                logger.debug(
+                        "Unable to backfill usage paths from content_hashes for {}::{}, falling back to element context.",
                         sourcePath, fieldName, e);
             }
         }

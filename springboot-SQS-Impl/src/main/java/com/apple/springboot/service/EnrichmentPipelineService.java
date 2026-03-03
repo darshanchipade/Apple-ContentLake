@@ -15,17 +15,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
-
 import java.util.concurrent.CompletableFuture;
-
 import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
 public class EnrichmentPipelineService {
-
     private static final Logger logger = LoggerFactory.getLogger(EnrichmentPipelineService.class);
-
     private final CleansedDataStoreRepository cleansedDataStoreRepository;
     private final EnrichedContentElementRepository enrichedContentElementRepository;
     private final ObjectMapper objectMapper;
@@ -41,15 +37,15 @@ public class EnrichmentPipelineService {
      * Creates the pipeline service coordinating enrichment execution.
      */
     public EnrichmentPipelineService(CleansedDataStoreRepository cleansedDataStoreRepository,
-                                     EnrichedContentElementRepository enrichedContentElementRepository,
-                                     ObjectMapper objectMapper,
-                                     SqsService sqsService,
-                                     EnrichmentCompletionService completionService,
-                                     EnrichmentProcessor enrichmentProcessor,
-                                     EnrichmentPersistenceService persistenceService,
-                                     EnrichmentProgressService progressService,
-                                     ContentHashingService contentHashingService,
-                                     @Value("${app.enrichment.use-sqs:false}") boolean useSqs) {
+            EnrichedContentElementRepository enrichedContentElementRepository,
+            ObjectMapper objectMapper,
+            SqsService sqsService,
+            EnrichmentCompletionService completionService,
+            EnrichmentProcessor enrichmentProcessor,
+            EnrichmentPersistenceService persistenceService,
+            EnrichmentProgressService progressService,
+            ContentHashingService contentHashingService,
+            @Value("${app.enrichment.use-sqs:false}") boolean useSqs) {
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.enrichedContentElementRepository = enrichedContentElementRepository;
         this.objectMapper = objectMapper;
@@ -71,30 +67,29 @@ public class EnrichmentPipelineService {
             logger.warn("Received null or no ID CleansedDataStore entry for enrichment. Skipping...");
             return;
         }
-
         UUID cleansedDataStoreId = cleansedDataEntry.getId();
         logger.info("Starting enrichment process for CleansedDataStore ID: {}", cleansedDataStoreId);
-
         if (!"CLEANSED_PENDING_ENRICHMENT".equals(cleansedDataEntry.getStatus())) {
-            logger.info("CleansedDataStore ID: {} is not in 'CLEANSED_PENDING_ENRICHMENT' state (current: {}). Skipping enrichment.",
+            logger.info(
+                    "CleansedDataStore ID: {} is not in 'CLEANSED_PENDING_ENRICHMENT' state (current: {}). Skipping enrichment.",
                     cleansedDataStoreId, cleansedDataEntry.getStatus());
             return;
         }
-
         cleansedDataEntry.setStatus("ENRICHMENT_IN_PROGRESS");
         cleansedDataStoreRepository.save(cleansedDataEntry);
-
         List<Map<String, Object>> maps = cleansedDataEntry.getCleansedItems();
         if (maps == null || maps.isEmpty()) {
-            logger.info("No items found in cleansed_items for CleansedDataStore ID: {}. Marking as ENRICHED_NO_ITEMS_TO_PROCESS.", cleansedDataStoreId);
+            logger.info(
+                    "No items found in cleansed_items for CleansedDataStore ID: {}. Marking as ENRICHED_NO_ITEMS_TO_PROCESS.",
+                    cleansedDataStoreId);
             cleansedDataEntry.setStatus("ENRICHED_NO_ITEMS_TO_PROCESS");
             cleansedDataStoreRepository.save(cleansedDataEntry);
             return;
         }
-
         // Convert and deduplicate by (sourcePath, originalFieldName)
         List<CleansedItemDetail> rawItems = convertMapsToCleansedItemDetails(maps);
-        logger.info("Converted {} cleansed entries into {} unique (sourcePath,field) pairs for CleansedDataStore ID {}.",
+        logger.info(
+                "Converted {} cleansed entries into {} unique (sourcePath,field) pairs for CleansedDataStore ID {}.",
                 maps.size(), rawItems.size(), cleansedDataStoreId);
         List<CleansedItemDetail> itemsToEnrich = rawItems.stream()
                 .collect(Collectors.collectingAndThen(
@@ -102,34 +97,32 @@ public class EnrichmentPipelineService {
                                 it -> it.sourcePath + "::" + it.originalFieldName,
                                 it -> it,
                                 (a, b) -> a,
-                                LinkedHashMap::new
-                        ),
-                        m -> new ArrayList<>(m.values())
-                ));
-
+                                LinkedHashMap::new),
+                        m -> new ArrayList<>(m.values())));
         // Filter to only items that need enrichment (text changed).
         // Priority order:
-        // 1) If this cleansedDataId already has enriched elements, compare against those (supports "edit one item and re-run").
-        // IMPORTANT: Compare against the previous version for this same sourceUri to avoid false
-        // negatives from global "exists" checks (which can match other sources/versions).
+        // 1) If this cleansedDataId already has enriched elements, compare against
+        // those (supports "edit one item and re-run").
+        // IMPORTANT: Compare against the previous version for this same sourceUri to
+        // avoid false
+        // negatives from global "exists" checks (which can match other
+        // sources/versions).
         List<CleansedItemDetail> changedItems;
-        List<com.apple.springboot.model.EnrichedContentElement> currentElements =
-                enrichedContentElementRepository.findAllByCleansedDataId(cleansedDataStoreId);
+        List<com.apple.springboot.model.EnrichedContentElement> currentElements = enrichedContentElementRepository
+                .findAllByCleansedDataId(cleansedDataStoreId);
         if (currentElements != null && !currentElements.isEmpty()) {
             Map<String, String> currentHashByKey = currentElements.stream()
                     .filter(e -> e.getItemSourcePath() != null && e.getItemOriginalFieldName() != null)
                     .collect(Collectors.toMap(
                             e -> e.getItemSourcePath() + "::" + e.getItemOriginalFieldName(),
                             com.apple.springboot.model.EnrichedContentElement::getContentHash,
-                            (a, b) -> a
-                    ));
+                            (a, b) -> a));
             Map<String, String> currentTextByKey = currentElements.stream()
                     .filter(e -> e.getItemSourcePath() != null && e.getItemOriginalFieldName() != null)
                     .collect(Collectors.toMap(
                             e -> e.getItemSourcePath() + "::" + e.getItemOriginalFieldName(),
                             com.apple.springboot.model.EnrichedContentElement::getCleansedText,
-                            (a, b) -> a
-                    ));
+                            (a, b) -> a));
             changedItems = itemsToEnrich.stream()
                     .filter(itemDetail -> {
                         String key = itemDetail.sourcePath + "::" + itemDetail.originalFieldName;
@@ -146,22 +139,20 @@ public class EnrichmentPipelineService {
             Integer currentVersion = cleansedDataEntry.getVersion();
             Integer previousVersion = (currentVersion != null && currentVersion > 1) ? currentVersion - 1 : null;
             if (previousVersion != null && cleansedDataEntry.getSourceUri() != null) {
-                List<com.apple.springboot.model.EnrichedContentElement> previousElements =
-                        enrichedContentElementRepository.findAllBySourceUriAndVersion(cleansedDataEntry.getSourceUri(), previousVersion);
+                List<com.apple.springboot.model.EnrichedContentElement> previousElements = enrichedContentElementRepository
+                        .findAllBySourceUriAndVersion(cleansedDataEntry.getSourceUri(), previousVersion);
                 Map<String, String> previousHashByKey = previousElements.stream()
                         .filter(e -> e.getItemSourcePath() != null && e.getItemOriginalFieldName() != null)
                         .collect(Collectors.toMap(
                                 e -> e.getItemSourcePath() + "::" + e.getItemOriginalFieldName(),
                                 com.apple.springboot.model.EnrichedContentElement::getContentHash,
-                                (a, b) -> a
-                        ));
+                                (a, b) -> a));
                 Map<String, String> previousTextByKey = previousElements.stream()
                         .filter(e -> e.getItemSourcePath() != null && e.getItemOriginalFieldName() != null)
                         .collect(Collectors.toMap(
                                 e -> e.getItemSourcePath() + "::" + e.getItemOriginalFieldName(),
                                 com.apple.springboot.model.EnrichedContentElement::getCleansedText,
-                                (a, b) -> a
-                        ));
+                                (a, b) -> a));
                 changedItems = itemsToEnrich.stream()
                         .filter(itemDetail -> {
                             String key = itemDetail.sourcePath + "::" + itemDetail.originalFieldName;
@@ -177,106 +168,133 @@ public class EnrichmentPipelineService {
                         .collect(Collectors.toList());
             } else {
                 // First run (or missing version info): fall back to existence check.
-                // Prefer scoped-by-sourceUri when available to avoid cross-source false negatives.
+                // Prefer scoped-by-sourceUri when available to avoid cross-source false
+                // negatives.
                 changedItems = itemsToEnrich.stream()
                         .filter(itemDetail -> {
                             String currentHash = contentHashingService.hash(itemDetail.cleansedContent);
                             String sourceUri = cleansedDataEntry.getSourceUri();
+
+                            // For skipped items, contentHash might be unstable or empty due to bypassed
+                            // cleansing.
+                            // We MUST compare their raw cleansedContent (which holds the original
+                            // unstructured value)
+                            // to avoid perpetually re-adding them as "new".
+                            if (itemDetail.skipEnrichment) {
+                                boolean exists = false;
+                                if (sourceUri != null) {
+                                    exists = enrichedContentElementRepository
+                                            .existsBySourceUriAndItemSourcePathAndItemOriginalFieldNameAndCleansedText(
+                                                    sourceUri,
+                                                    itemDetail.sourcePath,
+                                                    itemDetail.originalFieldName,
+                                                    itemDetail.cleansedContent);
+                                }
+                                if (!exists) {
+                                    exists = enrichedContentElementRepository
+                                            .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(
+                                                    itemDetail.sourcePath,
+                                                    itemDetail.originalFieldName,
+                                                    itemDetail.cleansedContent);
+                                }
+                                if (!exists) {
+                                    // 3rd fallback: Complete global existence across all paths and locales
+                                    exists = enrichedContentElementRepository
+                                            .existsByItemOriginalFieldNameAndCleansedText(
+                                                    itemDetail.originalFieldName,
+                                                    itemDetail.cleansedContent);
+                                }
+                                return !exists;
+                            }
+
+                            boolean exists = false;
                             if (sourceUri != null && currentHash != null) {
-                                return !enrichedContentElementRepository
+                                exists = enrichedContentElementRepository
                                         .existsBySourceUriAndItemSourcePathAndItemOriginalFieldNameAndContentHash(
                                                 sourceUri,
                                                 itemDetail.sourcePath,
                                                 itemDetail.originalFieldName,
                                                 currentHash);
                             }
-                            if (currentHash != null) {
-                                return !enrichedContentElementRepository
+                            if (!exists && currentHash != null) {
+                                exists = enrichedContentElementRepository
                                         .existsByItemSourcePathAndItemOriginalFieldNameAndContentHash(
                                                 itemDetail.sourcePath,
                                                 itemDetail.originalFieldName,
                                                 currentHash);
                             }
-                            if (sourceUri != null) {
-                                return !enrichedContentElementRepository
+                            if (!exists && sourceUri != null) {
+                                exists = enrichedContentElementRepository
                                         .existsBySourceUriAndItemSourcePathAndItemOriginalFieldNameAndCleansedText(
                                                 sourceUri,
                                                 itemDetail.sourcePath,
                                                 itemDetail.originalFieldName,
                                                 itemDetail.cleansedContent);
                             }
-                            return !enrichedContentElementRepository
-                                    .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(
-                                            itemDetail.sourcePath,
-                                            itemDetail.originalFieldName,
-                                            itemDetail.cleansedContent);
+                            if (!exists) {
+                                exists = enrichedContentElementRepository
+                                        .existsByItemSourcePathAndItemOriginalFieldNameAndCleansedText(
+                                                itemDetail.sourcePath,
+                                                itemDetail.originalFieldName,
+                                                itemDetail.cleansedContent);
+                            }
+                            return !exists;
                         })
                         .collect(Collectors.toList());
             }
         }
-
         logger.info("After change-detection filtering, {} items remain for processing (CleansedDataStore ID {}).",
                 changedItems.size(), cleansedDataStoreId);
-
         if (changedItems.isEmpty()) {
-            logger.info("No items require enrichment for CleansedDataStore ID: {}. Marking as ENRICHED_NO_ITEMS_TO_PROCESS.", cleansedDataStoreId);
+            logger.info(
+                    "No items require enrichment for CleansedDataStore ID: {}. Marking as ENRICHED_NO_ITEMS_TO_PROCESS.",
+                    cleansedDataStoreId);
             cleansedDataEntry.setStatus("ENRICHED_NO_ITEMS_TO_PROCESS");
             cleansedDataEntry.setEnrichmentExpectedCount(0);
             cleansedDataStoreRepository.save(cleansedDataEntry);
             return;
         }
-
         List<CleansedItemDetail> skippedItems = changedItems.stream()
                 .filter(detail -> detail.skipEnrichment)
                 .collect(Collectors.toList());
         List<CleansedItemDetail> itemsToQueue = changedItems.stream()
                 .filter(detail -> !detail.skipEnrichment)
-                .collect(Collectors.toList());
-
+                .collect(Collectors
+                        .toList());
         logger.info("Split {} items into {} to queue and {} to skip enrichment for CleansedDataStore ID {}.",
                 changedItems.size(), itemsToQueue.size(), skippedItems.size(), cleansedDataStoreId);
         // Persist expected count for restart-safe completion/finalization.
         cleansedDataEntry.setEnrichmentExpectedCount(changedItems.size());
         cleansedDataStoreRepository.save(cleansedDataEntry);
         progressService.startTracking(cleansedDataStoreId, changedItems.size());
-
         if (useSqs) {
-            logger.info("Starting completion tracking for CleansedDataStore ID {} with {} total items (including skipped).",
+            logger.info(
+                    "Starting completion tracking for CleansedDataStore ID {} with {} total items (including skipped).",
                     cleansedDataStoreId, changedItems.size());
             completionService.startTracking(cleansedDataStoreId, changedItems.size());
         }
-
         for (CleansedItemDetail skipped : skippedItems) {
             handleSkippedItem(skipped, cleansedDataEntry, useSqs);
         }
-
         if (itemsToQueue.isEmpty()) {
-            logger.info("All {} items were skipped for enrichment for CleansedDataStore ID {}.", changedItems.size(), cleansedDataStoreId);
+            logger.info("All {} items were skipped for enrichment for CleansedDataStore ID {}.", changedItems.size(),
+                    cleansedDataStoreId);
             cleansedDataEntry.setStatus("ENRICHMENT_SKIPPED");
             cleansedDataStoreRepository.save(cleansedDataEntry);
-            // Even when everything is skipped (e.g. analytics excluded), we still need to run the
-            // finalization steps (consolidation + embedding markers + final status) so downstream
-            // reads don't end up with empty consolidated tables.
-            try {
-                CleansedDataStore latestForFinalization =
-                        cleansedDataStoreRepository.findById(cleansedDataStoreId).orElse(cleansedDataEntry);
-                enrichmentProcessor.runFinalizationSteps(latestForFinalization);
-            } catch (Exception e) {
-                logger.error("Finalization failed for CleansedDataStore ID {} after skipping all items: {}", cleansedDataStoreId, e.getMessage(), e);
-            }
+            // Even when everything is skipped (e.g. analytics excluded), we still need to
+            // run the finalization steps (consolidation + embedding markers + final
+            // status).
+            // Defer this to after commit to avoid pessimistic locking conflicts.
+            scheduleInlineFinalization(cleansedDataEntry);
             return;
         }
-
         logger.info("Queuing {} items for enrichment after skipping {} for CleansedDataStore ID {}.",
                 itemsToQueue.size(), skippedItems.size(), cleansedDataStoreId);
-
         List<EnrichmentMessage> messages = itemsToQueue.stream()
                 .map(itemDetail -> new EnrichmentMessage(itemDetail, cleansedDataStoreId))
                 .collect(Collectors.toList());
-
         cleansedDataEntry.setStatus("ENRICHMENT_QUEUED");
         cleansedDataStoreRepository.save(cleansedDataEntry);
-
         if (useSqs) {
             if (!messages.isEmpty()) {
                 sqsService.sendMessages(messages);
@@ -287,14 +305,15 @@ public class EnrichmentPipelineService {
                 try {
                     enrichmentProcessor.processInline(message.getCleansedItemDetail(), cleansedDataEntry);
                 } catch (Exception ex) {
-                    logger.error("Inline enrichment failed for {}::{} - {}", message.getCleansedItemDetail().sourcePath, message.getCleansedItemDetail().originalFieldName, ex.getMessage(), ex);
+                    logger.error("Inline enrichment failed for {}::{} - {}", message.getCleansedItemDetail().sourcePath,
+                            message.getCleansedItemDetail().originalFieldName, ex.getMessage(), ex);
                 }
             }
             scheduleInlineFinalization(cleansedDataEntry);
             return;
         }
-
-        logger.info("{} items were dispatched for enrichment for CleansedDataStore ID: {}", itemsToQueue.size(), cleansedDataEntry.getId());
+        logger.info("{} items were dispatched for enrichment for CleansedDataStore ID: {}", itemsToQueue.size(),
+                cleansedDataEntry.getId());
     }
 
     /**
@@ -325,7 +344,8 @@ public class EnrichmentPipelineService {
             try {
                 CleansedDataStore latest = cleansedDataStoreRepository.findById(cleansedDataStoreId).orElse(null);
                 if (latest == null) {
-                    logger.warn("Skipping inline finalization because CleansedDataStore ID {} no longer exists.", cleansedDataStoreId);
+                    logger.warn("Skipping inline finalization because CleansedDataStore ID {} no longer exists.",
+                            cleansedDataStoreId);
                     return;
                 }
                 enrichmentProcessor.finalizeInline(latest);
@@ -339,27 +359,28 @@ public class EnrichmentPipelineService {
     /**
      * Persists a skipped item and updates completion tracking.
      */
-    private void handleSkippedItem(CleansedItemDetail itemDetail, CleansedDataStore cleansedDataEntry, boolean trackCompletion) {
+    private void handleSkippedItem(CleansedItemDetail itemDetail, CleansedDataStore cleansedDataEntry,
+            boolean trackCompletion) {
         try {
             persistenceService.saveSkippedEnrichedElement(itemDetail, cleansedDataEntry, "ENRICHMENT_SKIPPED");
         } catch (Exception e) {
-            logger.error("Failed to persist skipped enrichment item for {}::{}: {}", itemDetail.sourcePath, itemDetail.originalFieldName, e.getMessage(), e);
+            logger.error("Failed to persist skipped enrichment item for {}::{}: {}", itemDetail.sourcePath,
+                    itemDetail.originalFieldName, e.getMessage(), e);
         }
-
         progressService.increment(cleansedDataEntry.getId(), itemDetail.originalFieldName + " (skipped)");
-
         if (!trackCompletion) {
             return;
         }
-
         try {
             boolean complete = completionService.itemCompleted(cleansedDataEntry.getId());
             if (complete) {
-                logger.info("All items complete for {} after processing skipped entries. Running finalization.", cleansedDataEntry.getId());
-                enrichmentProcessor.runFinalizationSteps(cleansedDataEntry);
+                logger.info("All items complete for {} after processing skipped entries. Running finalization.",
+                        cleansedDataEntry.getId());
+                scheduleInlineFinalization(cleansedDataEntry);
             }
         } catch (Exception ex) {
-            logger.error("Completion tracking failed for {} while handling skipped items: {}", cleansedDataEntry.getId(), ex.getMessage(), ex);
+            logger.error("Completion tracking failed for {} while handling skipped items: {}",
+                    cleansedDataEntry.getId(), ex.getMessage(), ex);
         }
     }
 
@@ -367,23 +388,38 @@ public class EnrichmentPipelineService {
      * Converts raw maps into typed item details for enrichment.
      */
     private List<CleansedItemDetail> convertMapsToCleansedItemDetails(List<Map<String, Object>> maps) {
-        return maps.stream()
-                .map(map -> {
-                    try {
-                        String sourcePath = (String) map.get("sourcePath");
-                        String originalFieldName = (String) map.get("originalFieldName");
-                        String cleansedContent = (String) map.get("cleansedContent");
-                        String model = (String) map.get("model");
-                        EnrichmentContext context = objectMapper.convertValue(map.get("context"), EnrichmentContext.class);
-                        boolean skipEnrichment = extractSkipFlag(map.get("skipEnrichment"));
-                        return new CleansedItemDetail(sourcePath, originalFieldName, cleansedContent, model, context, skipEnrichment);
-                    } catch (Exception e) {
-                        logger.warn("Could not convert map to CleansedItemDetail object. Skipping item. Map: {}, Error: {}", map, e.getMessage());
-                        return null;
-                    }
-                })
-                .filter(Objects::nonNull)
-                .collect(Collectors.toList());
+        Map<String, Integer> fieldOccurrences = new HashMap<>();
+        List<CleansedItemDetail> details = new ArrayList<>();
+
+        for (Map<String, Object> map : maps) {
+            try {
+                String sourcePath = (String) map.get("sourcePath");
+                String usagePath = (String) map.get("usagePath");
+                String originalFieldName = (String) map.get("originalFieldName");
+
+                String pathAndFieldKey = sourcePath + "::" + originalFieldName;
+                int count = fieldOccurrences.getOrDefault(pathAndFieldKey, 0) + 1;
+                fieldOccurrences.put(pathAndFieldKey, count);
+
+                String combinedFieldName = (count > 1)
+                        ? originalFieldName + "_" + count
+                        : originalFieldName;
+
+                String cleansedContent = (String) map.get("cleansedContent");
+                String model = (String) map.get("model");
+                EnrichmentContext context = objectMapper.convertValue(map.get("context"),
+                        EnrichmentContext.class);
+                boolean skipEnrichment = extractSkipFlag(map.get("skipEnrichment"));
+
+                details.add(new CleansedItemDetail(sourcePath, usagePath, combinedFieldName, cleansedContent, model,
+                        context, skipEnrichment));
+            } catch (Exception e) {
+                logger.warn(
+                        "Could not convert map to CleansedItemDetail object. Skipping item. Map: {}, Error: {}",
+                        map, e.getMessage());
+            }
+        }
+        return details;
     }
 
     /**

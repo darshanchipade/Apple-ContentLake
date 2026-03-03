@@ -41,8 +41,6 @@ import {
 } from "@/lib/metadata";
 import { describeSourceLabel, inferSourceType, pickString } from "@/lib/source";
 import {
-  readUploadHistory,
-  writeUploadHistory,
   type UploadHistoryItem,
   type UploadStatus,
 } from "@/lib/upload-history";
@@ -247,17 +245,23 @@ export default function IngestionPage() {
   }, [activeTab]);
 
   useEffect(() => {
-    const history = readUploadHistory();
-    if (history.length) {
-      setUploads(history);
-    }
-    setHistoryHydrated(true);
+    let cancelled = false;
+    const loadHistory = async () => {
+      try {
+        const response = await fetch("/api/ingestion/history", { cache: "no-store" });
+        if (!response.ok) throw new Error("Failed to load history");
+        const data = await response.json();
+        if (cancelled) return;
+        setUploads(data as UploadHistoryItem[]);
+        setHistoryHydrated(true);
+      } catch (e) {
+        console.error("Failed to load history from API", e);
+        if (!cancelled) setHistoryHydrated(true);
+      }
+    };
+    loadHistory();
+    return () => { cancelled = true; };
   }, []);
-
-  useEffect(() => {
-    if (!historyHydrated) return;
-    writeUploadHistory(uploads);
-  }, [uploads, historyHydrated]);
 
   const seedPreviewTree = (label: string, payload: unknown): TreeNode[] => {
     const counter = { value: 0 };
@@ -288,20 +292,20 @@ export default function IngestionPage() {
     setLocalFile(file);
     setExtractFeedback({ state: "idle" });
 
-     const uploadId = generateId();
-     pendingLocalUploadIdRef.current = uploadId;
-     setUploads((previous) => [
-       {
-         id: uploadId,
-         name: file.name,
-         size: file.size,
-         type: file.type || file.name.split(".").pop() || "file",
-         source: "Local",
-         status: "uploading",
-         createdAt: Date.now(),
-       },
-       ...previous,
-     ]);
+    const uploadId = generateId();
+    pendingLocalUploadIdRef.current = uploadId;
+    setUploads((previous) => [
+      {
+        id: uploadId,
+        name: file.name,
+        size: file.size,
+        type: file.type || file.name.split(".").pop() || "file",
+        source: "Local",
+        status: "uploading",
+        createdAt: Date.now(),
+      },
+      ...previous,
+    ]);
 
     if (file.name.toLowerCase().endsWith(".json")) {
       const text = await file.text();
@@ -317,10 +321,10 @@ export default function IngestionPage() {
             previous.map((upload) =>
               upload.id === uploadId
                 ? {
-                    ...upload,
-                    locale: filenameLocale ?? payloadLocale ?? upload.locale,
-                    pageId: pageId ?? upload.pageId,
-                  }
+                  ...upload,
+                  locale: filenameLocale ?? payloadLocale ?? upload.locale,
+                  pageId: pageId ?? upload.pageId,
+                }
                 : upload,
             ),
           );
@@ -433,28 +437,28 @@ export default function IngestionPage() {
       });
       const payload = await response.json();
       const details = parseBackendPayload(payload);
-    const fallbackIdentifier = `file-upload:${localFile.name}`;
-    const sourceIdentifier = details.sourceIdentifier ?? fallbackIdentifier;
-    const sourceType = inferSourceType(details.sourceType, sourceIdentifier, "file") ?? "file";
+      const fallbackIdentifier = `file-upload:${localFile.name}`;
+      const sourceIdentifier = details.sourceIdentifier ?? fallbackIdentifier;
+      const sourceType = inferSourceType(details.sourceType, sourceIdentifier, "file") ?? "file";
 
       setUploads((previous) =>
         previous.map((item) =>
           item.id === uploadId
             ? {
-                ...item,
-                status: response.ok ? "success" : "error",
-                cleansedId: details.cleansedId ?? item.cleansedId,
-                backendStatus: details.status ?? item.backendStatus,
-                backendMessage: details.message ?? item.backendMessage,
-                sourceIdentifier,
-                sourceType,
-                locale:
-                  filenameLocale ??
-                  details.locale ??
-                  payloadLocale ??
-                  item.locale,
-                pageId: payloadPageId ?? details.pageId ?? item.pageId,
-              }
+              ...item,
+              status: response.ok ? "success" : "error",
+              cleansedId: details.cleansedId ?? item.cleansedId,
+              backendStatus: details.status ?? item.backendStatus,
+              backendMessage: details.message ?? item.backendMessage,
+              sourceIdentifier,
+              sourceType,
+              locale:
+                filenameLocale ??
+                details.locale ??
+                payloadLocale ??
+                item.locale,
+              pageId: payloadPageId ?? details.pageId ?? item.pageId,
+            }
             : item,
         ),
       );
@@ -590,27 +594,27 @@ export default function IngestionPage() {
       });
       const payload = await response.json();
       const details = parseBackendPayload(payload);
-    const fallbackIdentifier = details.cleansedId ?? `api-payload:${uploadId}`;
-    const sourceIdentifier = details.sourceIdentifier ?? fallbackIdentifier;
-    const sourceType = inferSourceType(details.sourceType, sourceIdentifier, "api") ?? "api";
+      const fallbackIdentifier = details.cleansedId ?? `api-payload:${uploadId}`;
+      const sourceIdentifier = details.sourceIdentifier ?? fallbackIdentifier;
+      const sourceType = inferSourceType(details.sourceType, sourceIdentifier, "api") ?? "api";
 
       setUploads((previous) =>
         previous.map((upload) =>
           upload.id === uploadId
             ? {
-                ...upload,
-                status: response.ok ? "success" : "error",
-                cleansedId: details.cleansedId ?? upload.cleansedId,
-                backendStatus: details.status ?? upload.backendStatus,
-                backendMessage: details.message ?? upload.backendMessage,
-                sourceIdentifier,
-                sourceType,
-                locale:
-                  payloadMetadata.locale ??
-                  details.locale ??
-                  upload.locale,
-                pageId: payloadMetadata.pageId ?? details.pageId ?? upload.pageId,
-              }
+              ...upload,
+              status: response.ok ? "success" : "error",
+              cleansedId: details.cleansedId ?? upload.cleansedId,
+              backendStatus: details.status ?? upload.backendStatus,
+              backendMessage: details.message ?? upload.backendMessage,
+              sourceIdentifier,
+              sourceType,
+              locale:
+                payloadMetadata.locale ??
+                details.locale ??
+                upload.locale,
+              pageId: payloadMetadata.pageId ?? details.pageId ?? upload.pageId,
+            }
             : upload,
         ),
       );
@@ -737,19 +741,19 @@ export default function IngestionPage() {
       previous.map((upload) =>
         upload.id === uploadId
           ? {
-              ...upload,
-              status: response.ok ? "success" : "error",
-              cleansedId: details.cleansedId ?? upload.cleansedId,
-              backendStatus:
-                details.status ?? (response.ok ? "ACCEPTED" : upload.backendStatus),
-              backendMessage: details.message ?? upload.backendMessage,
-              sourceIdentifier,
-              sourceType,
-              locale:
-                details.locale ??
-                upload.locale,
-              pageId: details.pageId ?? upload.pageId,
-            }
+            ...upload,
+            status: response.ok ? "success" : "error",
+            cleansedId: details.cleansedId ?? upload.cleansedId,
+            backendStatus:
+              details.status ?? (response.ok ? "ACCEPTED" : upload.backendStatus),
+            backendMessage: details.message ?? upload.backendMessage,
+            sourceIdentifier,
+            sourceType,
+            locale:
+              details.locale ??
+              upload.locale,
+            pageId: details.pageId ?? upload.pageId,
+          }
           : upload,
       ),
     );
@@ -1189,7 +1193,7 @@ export default function IngestionPage() {
               )}
             </div>
 
-            <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm flex-1 flex flex-col min-h-[400px]">
+            <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm flex-1 flex flex-col min-h-[400px] max-h-[400px] xl:max-h-[500px]">
               <div className="flex flex-wrap items-center justify-between gap-3 shrink-0">
                 <h3 className="text-lg font-semibold text-slate-900">Upload History</h3>
                 <div className="relative w-full max-w-xs">
@@ -1289,7 +1293,7 @@ export default function IngestionPage() {
                 <input
                   type="search"
                   placeholder="Search fields..."
-                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-base lg:text-sm text-slate-900 focus:border-slate-900 focus:bg-white focus:outline-none"
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-base lg:text-sm text-slate-900 focus:border-slate-900 focus:bg-white focus:outline-none"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />

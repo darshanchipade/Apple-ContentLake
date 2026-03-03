@@ -246,8 +246,8 @@ export default function CleansingPageClient() {
         }
         throw new Error(
           (body as Record<string, unknown>)?.error as string ??
-            rawBody ??
-            "Backend rejected the items request.",
+          rawBody ??
+          "Backend rejected the items request.",
         );
       }
       const payloadRecord = (body as Record<string, unknown>) ?? {};
@@ -258,13 +258,13 @@ export default function CleansingPageClient() {
       setContext((previous) =>
         previous
           ? {
-              ...previous,
-              cachedItems: normalized,
-              rawBody:
-                typeof (body as Record<string, unknown>)?.rawBody === "string"
-                  ? ((body as Record<string, unknown>).rawBody as string)
-                  : previous.rawBody,
-            }
+            ...previous,
+            cachedItems: normalized,
+            rawBody:
+              typeof (body as Record<string, unknown>)?.rawBody === "string"
+                ? ((body as Record<string, unknown>).rawBody as string)
+                : previous.rawBody,
+          }
           : previous,
       );
     } catch (itemsErr) {
@@ -293,8 +293,8 @@ export default function CleansingPageClient() {
         if (!response.ok) {
           throw new Error(
             (body as Record<string, unknown>)?.error as string ??
-              rawBody ??
-              "Backend rejected the cleansed context request.",
+            rawBody ??
+            "Backend rejected the cleansed context request.",
           );
         }
         const proxyPayload = (body as Record<string, unknown>) ?? {};
@@ -376,9 +376,9 @@ export default function CleansingPageClient() {
         initialStatus === "ENRICHED_NO_ITEMS_TO_PROCESS"
           ? [{ status: initialStatus, timestamp: now }]
           : [
-              { status: "ENRICHMENT_TRIGGERED", timestamp: now },
-              { status: initialStatus, timestamp: now },
-            ];
+            { status: "ENRICHMENT_TRIGGERED", timestamp: now },
+            { status: initialStatus, timestamp: now },
+          ];
 
       saveEnrichmentContext({
         metadata: context.metadata,
@@ -474,135 +474,135 @@ export default function CleansingPageClient() {
               </div>
 
               <div className="flex-1 min-h-0 flex flex-col">
-              {itemsLoading ? (
-                <div className="rounded-2xl border border-gray-100 bg-gray-50 py-10 text-center text-sm text-gray-400">
-                  Fetching latest cleansed rows…
-                </div>
-              ) : itemsError ? (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                  <p className="font-semibold">Unable to load cleansed items.</p>
-                  <p className="mt-1">{itemsError}</p>
-                  <button
-                    type="button"
-                    onClick={() => context.metadata.cleansedId && fetchItems(context.metadata.cleansedId)}
-                    className="mt-3 rounded-full bg-amber-600 px-3 py-1 text-xs font-semibold text-white"
-                  >
-                    Retry fetch
-                  </button>
-                </div>
-              ) : items.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-gray-200 py-10 text-center text-sm text-gray-400">
-                  No cleansed items available yet.
-                </div>
-              ) : (
-                <div className="rounded-2xl border border-slate-100 overflow-hidden w-full flex-1 flex flex-col min-h-0">
-                  <div className="flex-1 overflow-y-auto custom-scrollbar">
-                    {/* Desktop Table */}
-                    <table className="hidden lg:table w-full text-left text-sm">
-                      <thead className="bg-slate-50 text-[10px] uppercase tracking-widest text-slate-400 sticky top-0 z-10">
-                        <tr>
-                          <th className="px-6 py-4 font-black">Field</th>
-                          <th className="px-6 py-4 font-black">Original</th>
-                          <th className="px-6 py-4 font-black">Cleansed</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 bg-white">
-                        {items.map((row, index) => (
-                          <tr key={row.id ?? `${row.field ?? "row"}-${index}`} className="hover:bg-slate-50/50 transition-colors">
-                            <td className="px-6 py-4 align-top font-bold text-slate-900 w-1/4">
-                              {row.field}
-                            </td>
-                            <td className="px-6 py-4 align-top text-slate-500 w-3/8">
-                              <pre className="whitespace-pre-wrap text-[11px] font-sans leading-relaxed">
-                                {row.original ?? "—"}
-                              </pre>
-                            </td>
-                            <td className="px-6 py-4 align-top text-slate-900 font-bold w-3/8">
-                              <pre className="whitespace-pre-wrap text-[11px] font-sans leading-relaxed">
-                                {row.cleansed ?? "—"}
-                              </pre>
-                            </td>
+                {itemsLoading ? (
+                  <div className="rounded-2xl border border-gray-100 bg-gray-50 py-10 text-center text-sm text-gray-400">
+                    Fetching latest cleansed rows…
+                  </div>
+                ) : itemsError ? (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                    <p className="font-semibold">Unable to load cleansed items.</p>
+                    <p className="mt-1">{itemsError}</p>
+                    <button
+                      type="button"
+                      onClick={() => context.metadata.cleansedId && fetchItems(context.metadata.cleansedId)}
+                      className="mt-3 rounded-full bg-amber-600 px-3 py-1 text-xs font-semibold text-white"
+                    >
+                      Retry fetch
+                    </button>
+                  </div>
+                ) : items.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-gray-200 py-10 text-center text-sm text-gray-400">
+                    No cleansed items available yet.
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-slate-100 overflow-hidden w-full flex-1 flex flex-col min-h-0">
+                    <div className="flex-1 overflow-y-auto custom-scrollbar">
+                      {/* Desktop Table */}
+                      <table className="hidden lg:table w-full text-left text-sm">
+                        <thead className="bg-slate-50 text-[10px] uppercase tracking-widest text-slate-400 sticky top-0 z-10">
+                          <tr>
+                            <th className="px-6 py-4 font-black">Field</th>
+                            <th className="px-6 py-4 font-black">Original</th>
+                            <th className="px-6 py-4 font-black">Cleansed</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 bg-white">
+                          {items.map((row, index) => (
+                            <tr key={row.id ?? `${row.field ?? "row"}-${index}`} className="hover:bg-slate-50/50 transition-colors">
+                              <td className="px-6 py-4 align-top font-bold text-slate-900 w-1/4">
+                                {row.field}
+                              </td>
+                              <td className="px-6 py-4 align-top text-slate-500 w-3/8">
+                                <pre className="whitespace-pre-wrap text-[11px] font-sans leading-relaxed">
+                                  {row.original ?? "—"}
+                                </pre>
+                              </td>
+                              <td className="px-6 py-4 align-top text-slate-900 font-bold w-3/8">
+                                <pre className="whitespace-pre-wrap text-[11px] font-sans leading-relaxed">
+                                  {row.cleansed ?? "—"}
+                                </pre>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
 
-                    {/* Mobile Card View */}
-                    <div className="lg:hidden divide-y divide-slate-100">
-                      {items.map((row, index) => (
-                        <div key={row.id ?? `${row.field ?? "row"}-${index}`} className="p-4 space-y-4">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-black text-primary uppercase tracking-widest">
-                              {row.field}
-                            </span>
-                            <span className="text-[10px] font-bold text-slate-300">#{index + 1}</span>
-                          </div>
-                          <div className="grid gap-4">
-                            <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
-                              <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-2">Original</p>
-                              <p className="text-xs text-slate-500 leading-relaxed break-all">{row.original ?? "—"}</p>
+                      {/* Mobile Card View */}
+                      <div className="lg:hidden divide-y divide-slate-100">
+                        {items.map((row, index) => (
+                          <div key={row.id ?? `${row.field ?? "row"}-${index}`} className="p-4 space-y-4">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-black text-primary uppercase tracking-widest">
+                                {row.field}
+                              </span>
+                              <span className="text-[10px] font-bold text-slate-300">#{index + 1}</span>
                             </div>
-                            <div className="bg-primary-soft/30 rounded-xl p-3 border border-primary-soft">
-                              <p className="text-[9px] font-bold text-primary uppercase tracking-widest mb-2">Cleansed</p>
-                              <p className="text-xs text-slate-900 font-bold leading-relaxed break-all">{row.cleansed ?? "—"}</p>
+                            <div className="grid gap-4">
+                              <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-2">Original</p>
+                                <p className="text-xs text-slate-500 leading-relaxed break-all">{row.original ?? "—"}</p>
+                              </div>
+                              <div className="bg-primary-soft/30 rounded-xl p-3 border border-primary-soft">
+                                <p className="text-[9px] font-bold text-primary uppercase tracking-widest mb-2">Cleansed</p>
+                                <p className="text-xs text-slate-900 font-bold leading-relaxed break-all">{row.cleansed ?? "—"}</p>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
+                )}
               </div>
             </section>
           </div>
 
           <aside className="lg:col-span-4 flex flex-col gap-8 lg:sticky lg:top-[20rem]">
             <section className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm shrink-0">
-               <div className="flex items-center justify-between mb-6">
-                  <h2 className="text-lg font-bold">Metadata</h2>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      clearCleansedContext();
-                      router.push("/ingestion");
-                    }}
-                    className="text-[10px] font-bold text-primary hover:underline uppercase tracking-wider"
-                  >
-                    Reset
-                  </button>
-               </div>
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-lg font-bold">Metadata</h2>
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearCleansedContext();
+                    router.push("/ingestion");
+                  }}
+                  className="text-[10px] font-bold text-primary hover:underline uppercase tracking-wider"
+                >
+                  Reset
+                </button>
+              </div>
 
-               <div className="space-y-6">
+              <div className="space-y-6">
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Name</p>
+                  <p className="text-sm font-bold text-gray-900 break-all">{context.metadata.name}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Source</p>
+                  <p className="text-sm font-bold text-gray-900">{sourceLabel}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Status</p>
+                  <p className="text-sm font-bold text-gray-900">{context.status ?? "Pending"}</p>
+                </div>
+                <div className="grid grid-cols-1 min-[400px]:grid-cols-2 gap-4">
                   <div>
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Name</p>
-                    <p className="text-sm font-bold text-gray-900 break-all">{context.metadata.name}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Source</p>
-                    <p className="text-sm font-bold text-gray-900">{sourceLabel}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Status</p>
-                    <p className="text-sm font-bold text-gray-900">{context.status ?? "Pending"}</p>
-                  </div>
-                  <div className="grid grid-cols-1 min-[400px]:grid-cols-2 gap-4">
-                    <div>
-                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Size</p>
-                      <p className="text-sm font-bold text-gray-900">{formatBytes(context.metadata.size)}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Locale</p>
-                      <p className="text-sm font-bold text-gray-900">{context.metadata.locale ?? "—"}</p>
-                    </div>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Size</p>
+                    <p className="text-sm font-bold text-gray-900">{formatBytes(context.metadata.size)}</p>
                   </div>
                   <div>
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Uploaded</p>
-                    <p className="text-[11px] font-bold text-gray-900">
-                      {new Date(context.metadata.uploadedAt).toLocaleString()}
-                    </p>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Locale</p>
+                    <p className="text-sm font-bold text-gray-900">{context.metadata.locale ?? "—"}</p>
                   </div>
-               </div>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Uploaded</p>
+                  <p className="text-[11px] font-bold text-gray-900">
+                    {new Date(context.metadata.uploadedAt).toLocaleString()}
+                  </p>
+                </div>
+              </div>
             </section>
 
             <section className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm">
@@ -629,16 +629,23 @@ export default function CleansingPageClient() {
                 <h2 className="text-lg font-bold text-gray-900">Continue?</h2>
               </div>
               <div className="flex flex-col gap-3">
-                <button
-                  type="button"
-                  onClick={handleSendToEnrichment}
-                  disabled={enrichmentFeedback.state === "loading"}
-                  className="rounded-full bg-primary py-3 text-sm font-semibold text-white transition hover:bg-accent disabled:opacity-50 w-full text-center flex items-center justify-center shadow-lg"
-                >
-                  {enrichmentFeedback.state === "loading"
-                    ? "Sending..."
-                    : "Send to Enrichment"}
-                </button>
+                {context.status === "PROCESSED_NO_CHANGES" ? (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 text-center">
+                    <p className="font-semibold">No new items found</p>
+                    <p className="mt-1 text-xs">This payload is a duplicate or has no updates. Enrichment is not required.</p>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleSendToEnrichment}
+                    disabled={enrichmentFeedback.state === "loading"}
+                    className="rounded-full bg-primary py-3 text-sm font-semibold text-white transition hover:bg-accent disabled:opacity-50 w-full text-center flex items-center justify-center shadow-lg"
+                  >
+                    {enrichmentFeedback.state === "loading"
+                      ? "Sending..."
+                      : "Send to Enrichment"}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => router.push("/extraction")}

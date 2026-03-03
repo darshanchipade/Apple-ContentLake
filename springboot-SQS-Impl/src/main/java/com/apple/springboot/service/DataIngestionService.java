@@ -4,6 +4,8 @@ import com.apple.springboot.model.*;
 import com.apple.springboot.repository.CleansedDataStoreRepository;
 import com.apple.springboot.repository.ContentHashRepository;
 import com.apple.springboot.repository.RawDataStoreRepository;
+import com.apple.springboot.repository.EnrichedContentElementRepository;
+import jakarta.annotation.PostConstruct;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -44,8 +46,7 @@ public class DataIngestionService {
     private static final Set<String> ICON_NODE_KEYS = Set.of("icon");
     private static final Set<String> ICON_META_KEYS = Set.of("_path", "_uri_path");
     private static final Set<String> IMAGE_META_KEYS = Set.of(
-            "_path", "_model", "_id", "_uri1x_path", "_uri2x_path", "_uri_path"
-    );
+            "_path", "_model", "_id", "_uri1x_path", "_uri2x_path", "_uri_path");
     private static final Pattern LOCALE_PATTERN = Pattern.compile("(?<=/)([a-z]{2})[-_]([A-Z]{2})(?=/|$)");
     private static final String USAGE_REF_DELIM = " ::ref:: ";
     private static final Map<String, String> EVENT_KEYWORDS = Map.of(
@@ -53,8 +54,7 @@ public class DataIngestionService {
             "father's day", "Fathers day",
             "tax", "Tax day",
             "christmas", "Christmas",
-            "mothers","Mothers day"
-    );
+            "mothers", "Mothers day");
 
     private final CleansedDataStoreRepository cleansedDataStoreRepository;
     private final ObjectMapper objectMapper;
@@ -64,6 +64,10 @@ public class DataIngestionService {
     private final String defaultS3BucketName;
     private final ContentHashRepository contentHashRepository;
     private final ItemVersionHashStore itemVersionHashStore;
+    // private final BedrockQueueService bedrockQueueService;
+    // private final ConsolidateDataQueueService pushToBedrockQueueService;
+    private final BedrockEnrichmentService enrichmentProcessor;
+    private final EnrichedContentElementRepository enrichedContentElementRepository;
     private final ContextUpdateService contextUpdateService;
     private final AssetImageStoreService assetImageStoreService;
     private final Set<String> excludedItemTypes;
@@ -88,39 +92,47 @@ public class DataIngestionService {
     @Value("${app.ingestion.debug-counters:true}")
     private boolean debugCountersEnabled;
 
-    // If true, persist per-item hashes per (sourceUri, version) into item_version_hashes
+    // If true, persist per-item hashes per (sourceUri, version) into
+    // item_version_hashes
     @Value("${app.ingestion.persist-version-hashes:true}")
     private boolean persistVersionHashes;
 
-    // If true, prefer item_version_hashes for delta comparison (fallback remains intact)
+    // If true, prefer item_version_hashes for delta comparison (fallback remains
+    // intact)
     @Value("${app.ingestion.use-persisted-version-hashes:true}")
     private boolean usePersistedVersionHashes;
+
+    private final com.apple.springboot.repository.IngestionJobRepository ingestionJobRepository;
 
     // Copy cleansing patterns
     private static final Pattern NBSP_PATTERN = Pattern.compile("\\{%nbsp%\\}");
     private static final Pattern SOSUMI_PATTERN = Pattern.compile("\\{%sosumi type=\"[^\"]+\" metadata=\"\\d+\"%\\}");
     private static final Pattern BR_PATTERN = Pattern.compile("\\{%br%\\}");
-    private static final Pattern URL_PATTERN = Pattern.compile(":\\s*\\[[^\\]]+\\]\\(\\{%url metadata=\"\\d+\" destination-type=\"[^\"]+\"%\\}\\)");
-    // private static final Pattern WJ_PATTERN = Pattern.compile("\\(\\{%wj%\\}\\)");
-    private static final Pattern NESTED_URL_PATTERN = Pattern.compile(":\\[\\s*:\\[[^\\]]+\\]\\(\\{%url metadata=\"\\d+\" destination-type=\"[^\"]+\"%\\}\\)\\]\\(\\{%wj%\\}\\)");
+    private static final Pattern URL_PATTERN = Pattern
+            .compile(":\\s*\\[[^\\]]+\\]\\(\\{%url metadata=\"\\d+\" destination-type=\"[^\"]+\"%\\}\\)");
+    // private static final Pattern WJ_PATTERN =
+    // Pattern.compile("\\(\\{%wj%\\}\\)");
+    private static final Pattern NESTED_URL_PATTERN = Pattern.compile(
+            ":\\[\\s*:\\[[^\\]]+\\]\\(\\{%url metadata=\"\\d+\" destination-type=\"[^\"]+\"%\\}\\)\\]\\(\\{%wj%\\}\\)");
     private static final Pattern METADATA_PATTERN = Pattern.compile("\\{% metadata=\"\\d+\" %\\}");
-
 
     /**
      * Constructs the service with required repositories and config values.
      */
     public DataIngestionService(RawDataStoreRepository rawDataStoreRepository,
-                                CleansedDataStoreRepository cleansedDataStoreRepository,
-                                ContentHashRepository contentHashRepository,
-                                ItemVersionHashStore itemVersionHashStore,
-                                ObjectMapper objectMapper,
-                                ResourceLoader resourceLoader,
-                                @Value("${app.json.file.path}") String jsonFilePath,
-                                S3StorageService s3StorageService,
-                                @Value("${app.s3.bucket-name}") String defaultS3BucketName,
-                                ContextUpdateService contextUpdateService,
-                                AssetImageStoreService assetImageStoreService,
-                                @Value("${app.ingestion.excluded-item-types:}") String excludedItemTypesProperty) {
+            CleansedDataStoreRepository cleansedDataStoreRepository,
+            ContentHashRepository contentHashRepository,
+            ItemVersionHashStore itemVersionHashStore,
+            ObjectMapper objectMapper,
+            ResourceLoader resourceLoader,
+            @Value("${app.json.file.path}") String jsonFilePath,
+            S3StorageService s3StorageService,
+            @Value("${app.s3.bucket-name}") String defaultS3BucketName,
+            ContextUpdateService contextUpdateService,
+            AssetImageStoreService assetImageStoreService,
+            @Value("${app.ingestion.excluded-item-types:}") String excludedItemTypesProperty,
+            EnrichedContentElementRepository enrichedContentElementRepository,
+            com.apple.springboot.repository.IngestionJobRepository ingestionJobRepository) {
         this.rawDataStoreRepository = rawDataStoreRepository;
         this.cleansedDataStoreRepository = cleansedDataStoreRepository;
         this.contentHashRepository = contentHashRepository;
@@ -133,12 +145,52 @@ public class DataIngestionService {
         this.s3StorageService = s3StorageService;
         this.defaultS3BucketName = defaultS3BucketName;
         this.excludedItemTypes = parseExcludedItemTypes(excludedItemTypesProperty);
+        // this.bedrockQueueService = null; // Assuming these are not final or will be
+        // uncommented
+        // this.pushToBedrockQueueService = null; // Assuming these are not final or
+        // will be uncommented
+        this.enrichmentProcessor = null; // Initialize to null as per instruction
+        this.enrichedContentElementRepository = enrichedContentElementRepository;
+        this.ingestionJobRepository = ingestionJobRepository;
     }
 
+    @PostConstruct
+    public void backfillMissingIngestionJobs() {
+        try {
+            List<RawDataStore> rawRecords = rawDataStoreRepository.findAll();
+            for (RawDataStore raw : rawRecords) {
+                // If an ingestion job doesn't exist for this raw_data_id, create it
+                if (ingestionJobRepository.findAllByOrderByCreatedAtDesc().stream()
+                        .noneMatch(job -> job.getRawDataId() != null && job.getRawDataId().equals(raw.getId()))) {
+
+                    com.apple.springboot.model.IngestionJob job = new com.apple.springboot.model.IngestionJob();
+                    job.setRawDataId(raw.getId());
+                    job.setUsername("SystemUser");
+                    job.setFileName(raw.getSourceUri() != null
+                            ? raw.getSourceUri().substring(raw.getSourceUri().lastIndexOf('/') + 1)
+                            : "Legacy Upload");
+                    job.setFileSize(0L);
+                    job.setSourceChannel(
+                            raw.getSourceUri() != null && raw.getSourceUri().startsWith("file-") ? "Local" : "API");
+
+                    // Map raw status
+                    job.setStatus(raw.getStatus() != null && raw.getStatus().contains("ERROR") ? "error" : "success");
+
+                    job.setCreatedAt(raw.getReceivedAt() != null ? raw.getReceivedAt() : OffsetDateTime.now());
+                    job.setUpdatedAt(OffsetDateTime.now());
+                    ingestionJobRepository.save(job);
+                    logger.info("Backfilled missing IngestionJob for RawDataStore ID: {}", raw.getId());
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("Failed to backfill missing ingestion jobs: {}", e.getMessage());
+        }
+    }
 
     private static class S3ObjectDetails {
         final String bucketName;
         final String fileKey;
+
         /**
          * Holds parsed bucket and key values for an S3 URI.
          */
@@ -158,17 +210,22 @@ public class DataIngestionService {
         String pathPart = s3Uri.substring("s3://".length());
         if (pathPart.startsWith("///")) {
             String key = pathPart.substring(2);
-            if (key.startsWith("/")) key = key.substring(1);
-            if (key.isEmpty()) throw new IllegalArgumentException("Invalid S3 URI: Key is empty for default bucket URI " + s3Uri);
+            if (key.startsWith("/"))
+                key = key.substring(1);
+            if (key.isEmpty())
+                throw new IllegalArgumentException("Invalid S3 URI: Key is empty for default bucket URI " + s3Uri);
             return new S3ObjectDetails(defaultS3BucketName, key);
         } else {
             int firstSlashIndex = pathPart.indexOf('/');
             if (firstSlashIndex == -1 || firstSlashIndex == 0 || firstSlashIndex == pathPart.length() - 1) {
-                throw new IllegalArgumentException("Invalid S3 URI format. Expected s3://bucket/key or s3:///key. Received: " + s3Uri);
+                throw new IllegalArgumentException(
+                        "Invalid S3 URI format. Expected s3://bucket/key or s3:///key. Received: " + s3Uri);
             }
             String bucket = pathPart.substring(0, firstSlashIndex);
             String key = pathPart.substring(firstSlashIndex + 1);
-            if (key.isEmpty()) throw new IllegalArgumentException("Invalid S3 URI: Key is empty for bucket '" + bucket + "' in URI " + s3Uri);
+            if (key.isEmpty())
+                throw new IllegalArgumentException(
+                        "Invalid S3 URI: Key is empty for bucket '" + bucket + "' in URI " + s3Uri);
             return new S3ObjectDetails(bucket, key);
         }
     }
@@ -182,7 +239,8 @@ public class DataIngestionService {
         try {
             return ingestAndCleanseSingleFile(this.jsonFilePath);
         } catch (IOException | RuntimeException e) {
-            logger.error("Error processing default jsonFilePath '{}': {}. Creating error record.", this.jsonFilePath, e.getMessage(), e);
+            logger.error("Error processing default jsonFilePath '{}': {}. Creating error record.", this.jsonFilePath,
+                    e.getMessage(), e);
             String sourceUri;
             if (!this.jsonFilePath.startsWith("s3://") && !this.jsonFilePath.startsWith("classpath:")) {
                 sourceUri = "classpath:" + this.jsonFilePath;
@@ -195,11 +253,13 @@ public class DataIngestionService {
                 newRawData.setSourceUri(finalSourceUri);
                 return newRawData;
             });
-            if(rawData.getReceivedAt() == null) rawData.setReceivedAt(OffsetDateTime.now());
+            if (rawData.getReceivedAt() == null)
+                rawData.setReceivedAt(OffsetDateTime.now());
             rawData.setStatus("FILE_PROCESSING_ERROR");
             rawData.setRawContentText("Error processing file: " + e.getMessage());
             rawDataStoreRepository.save(rawData);
-            return createAndSaveErrorCleansedDataStore(rawData, "FILE_ERROR", "ERROR FROM FILE","FileProcessingError: " + e.getMessage());
+            return createAndSaveErrorCleansedDataStore(rawData, "FILE_ERROR", "ERROR FROM FILE",
+                    "FileProcessingError: " + e.getMessage());
         }
     }
 
@@ -221,7 +281,7 @@ public class DataIngestionService {
             try {
                 S3ObjectDetails s3Details = parseS3Uri(sourceUriForDb);
                 rawJsonContent = s3StorageService.downloadFileContent(s3Details.bucketName, s3Details.fileKey);
-                //setting up source content type
+                // setting up source content type
                 if (s3Details.fileKey.endsWith(".json")) {
                     rawDataStore.setSourceContentType("application/json");
                 } else {
@@ -241,7 +301,8 @@ public class DataIngestionService {
                     logger.warn("File not found or content is null from S3 URI: {}.", sourceUriForDb);
                     rawDataStore.setStatus("S3_FILE_NOT_FOUND_OR_EMPTY");
                     rawDataStoreRepository.save(rawDataStore);
-                    return createAndSaveErrorCleansedDataStore(rawDataStore, "S3_FILE_NOT_FOUND_OR_EMPTY", "S3 ERROR", "S3Error: File not found or content was null at " + sourceUriForDb);
+                    return createAndSaveErrorCleansedDataStore(rawDataStore, "S3_FILE_NOT_FOUND_OR_EMPTY", "S3 ERROR",
+                            "S3Error: File not found or content was null at " + sourceUriForDb);
                 }
                 logger.info("Successfully downloaded content from S3 URI: {}", sourceUriForDb);
                 rawDataStore.setStatus("S3_CONTENT_RECEIVED");
@@ -250,13 +311,16 @@ public class DataIngestionService {
                 rawDataStore.setStatus("INVALID_S3_URI");
                 rawDataStore.setRawContentText("Invalid S3 URI: " + e.getMessage());
                 rawDataStoreRepository.save(rawDataStore);
-                return createAndSaveErrorCleansedDataStore(rawDataStore, "INVALID_S3_URI","INVALID S3", "InvalidS3URI: " + e.getMessage());
+                return createAndSaveErrorCleansedDataStore(rawDataStore, "INVALID_S3_URI", "INVALID S3",
+                        "InvalidS3URI: " + e.getMessage());
             } catch (Exception e) {
-                logger.error("Failed to download S3 content for URI: '{}'. Error: {}", sourceUriForDb, e.getMessage(), e);
+                logger.error("Failed to download S3 content for URI: '{}'. Error: {}", sourceUriForDb, e.getMessage(),
+                        e);
                 rawDataStore.setStatus("S3_DOWNLOAD_FAILED");
                 rawDataStore.setRawContentText("Error fetching S3 content: " + e.getMessage());
                 rawDataStoreRepository.save(rawDataStore);
-                return createAndSaveErrorCleansedDataStore(rawDataStore, "S3_DOWNLOAD_FAILED", "S3ERROR","S3DownloadError: " + e.getMessage());
+                return createAndSaveErrorCleansedDataStore(rawDataStore, "S3_DOWNLOAD_FAILED", "S3ERROR",
+                        "S3DownloadError: " + e.getMessage());
             }
         } else {
             sourceUriForDb = identifier.startsWith("classpath:") ? identifier : "classpath:" + identifier;
@@ -268,7 +332,8 @@ public class DataIngestionService {
                 logger.error("Classpath resource not found: {}", sourceUriForDb);
                 rawDataStore.setStatus("CLASSPATH_FILE_NOT_FOUND");
                 rawDataStoreRepository.save(rawDataStore);
-                return createAndSaveErrorCleansedDataStore(rawDataStore, "CLASSPATH_FILE_NOT_FOUND", "FILE NOT FOUND","ClasspathError: File not found at " + sourceUriForDb);
+                return createAndSaveErrorCleansedDataStore(rawDataStore, "CLASSPATH_FILE_NOT_FOUND", "FILE NOT FOUND",
+                        "ClasspathError: File not found at " + sourceUriForDb);
             }
             try (Reader reader = new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8)) {
                 rawJsonContent = FileCopyUtils.copyToString(reader);
@@ -277,9 +342,10 @@ public class DataIngestionService {
                 rawDataStore.setStatus("CLASSPATH_READ_ERROR");
                 rawDataStore.setRawContentText("Error reading classpath file: " + e.getMessage());
                 rawDataStoreRepository.save(rawDataStore);
-                return createAndSaveErrorCleansedDataStore(rawDataStore, "CLASSPATH_READ_ERROR", "READ ERROR","IOError: " + e.getMessage());
+                return createAndSaveErrorCleansedDataStore(rawDataStore, "CLASSPATH_READ_ERROR", "READ ERROR",
+                        "IOError: " + e.getMessage());
             }
-            try{
+            try {
                 JsonNode rootNode = objectMapper.readTree(rawJsonContent);
                 ((com.fasterxml.jackson.databind.node.ObjectNode) rootNode).remove("_model");
                 ((com.fasterxml.jackson.databind.node.ObjectNode) rootNode).remove("_path");
@@ -296,7 +362,8 @@ public class DataIngestionService {
             rawDataStore.setRawContentText(rawJsonContent);
             rawDataStore.setStatus("EMPTY_CONTENT_LOADED");
             RawDataStore savedForEmpty = rawDataStoreRepository.save(rawDataStore);
-            return createAndSaveErrorCleansedDataStore(savedForEmpty, "EMPTY_CONTENT_LOADED","Error" ,"ContentError: Loaded content was empty.");
+            return createAndSaveErrorCleansedDataStore(savedForEmpty, "EMPTY_CONTENT_LOADED", "Error",
+                    "ContentError: Loaded content was empty.");
         }
         String contextJson = null;
         try {
@@ -310,17 +377,22 @@ public class DataIngestionService {
             logger.warn("Could not read context-config.json, continuing without it.", e);
         }
         String contentHash = calculateContentHash(rawJsonContent, contextJson);
-        Optional<RawDataStore> existingRawDataOpt = rawDataStoreRepository.findBySourceUriAndContentHash(sourceUriForDb, contentHash);
+        Optional<RawDataStore> existingRawDataOpt = rawDataStoreRepository.findBySourceUriAndContentHash(sourceUriForDb,
+                contentHash);
 
         if (existingRawDataOpt.isPresent()) {
             RawDataStore existingRawData = existingRawDataOpt.get();
-            logger.info("Duplicate content detected for source: {}. Using existing raw_data_id: {}", sourceUriForDb, existingRawData.getId());
-            Optional<CleansedDataStore> existingCleansedData = cleansedDataStoreRepository.findByRawDataId(existingRawData.getId());
-            if(existingCleansedData.isPresent()){
-                logger.info("Found existing cleansed data for raw_data_id: {}. Skipping processing.", existingRawData.getId());
+            logger.info("Duplicate content detected for source: {}. Using existing raw_data_id: {}", sourceUriForDb,
+                    existingRawData.getId());
+            Optional<CleansedDataStore> existingCleansedData = cleansedDataStoreRepository
+                    .findByRawDataId(existingRawData.getId());
+            if (existingCleansedData.isPresent()) {
+                logger.info("Found existing cleansed data for raw_data_id: {}. Skipping processing.",
+                        existingRawData.getId());
                 return existingCleansedData.get();
             } else {
-                logger.info("No existing cleansed data for raw_data_id: {}. Proceeding with processing.", existingRawData.getId());
+                logger.info("No existing cleansed data for raw_data_id: {}. Proceeding with processing.",
+                        existingRawData.getId());
                 return processLoadedContent(rawJsonContent, existingRawData);
             }
         }
@@ -330,7 +402,8 @@ public class DataIngestionService {
         rawDataStore.setContentHash(contentHash);
 
         // Versioning logic
-        Optional<RawDataStore> latestVersionOpt = rawDataStoreRepository.findTopBySourceUriOrderByVersionDesc(sourceUriForDb);
+        Optional<RawDataStore> latestVersionOpt = rawDataStoreRepository
+                .findTopBySourceUriOrderByVersionDesc(sourceUriForDb);
         if (!latestVersionOpt.isEmpty()) {
             RawDataStore latestVersion = latestVersionOpt.get();
             if (latestVersion.getLatest()) {
@@ -343,25 +416,30 @@ public class DataIngestionService {
         }
 
         RawDataStore savedRawDataStore = rawDataStoreRepository.save(rawDataStore);
-        logger.info("Processed raw data with ID: {} for source: {} with status: {}", savedRawDataStore.getId(), sourceUriForDb, savedRawDataStore.getStatus());
+        logger.info("Processed raw data with ID: {} for source: {} with status: {}", savedRawDataStore.getId(),
+                sourceUriForDb, savedRawDataStore.getStatus());
 
         return processLoadedContent(rawJsonContent, savedRawDataStore);
     }
+
     /**
      * Ingests a raw JSON payload and persists the cleansed result.
      */
     @Transactional
-    public CleansedDataStore ingestAndCleanseJsonPayload(String jsonPayload, String sourceIdentifier) throws JsonProcessingException {
-        return ingestAndCleanseJsonPayload(jsonPayload, sourceIdentifier, UploadRequestMetadata.of(null, null, null, null, null, null));
+    public CleansedDataStore ingestAndCleanseJsonPayload(String jsonPayload, String sourceIdentifier)
+            throws JsonProcessingException {
+        return ingestAndCleanseJsonPayload(jsonPayload, sourceIdentifier,
+                UploadRequestMetadata.of(null, null, null, null, null, null));
     }
 
     /**
-     * Ingests a raw JSON payload with optional upload metadata and persists the cleansed result.
+     * Ingests a raw JSON payload with optional upload metadata and persists the
+     * cleansed result.
      */
     @Transactional
     public CleansedDataStore ingestAndCleanseJsonPayload(String jsonPayload,
-                                                         String sourceIdentifier,
-                                                         UploadRequestMetadata uploadMetadata) throws JsonProcessingException {
+            String sourceIdentifier,
+            UploadRequestMetadata uploadMetadata) throws JsonProcessingException {
         RawDataStore rawDataStore = findOrCreateRawDataStore(jsonPayload, sourceIdentifier, uploadMetadata);
         if (rawDataStore == null) {
             return null;
@@ -370,9 +448,12 @@ public class DataIngestionService {
     }
 
     /**
-     * Replays the cleansing pipeline for an existing CleansedDataStore record without re-uploading
-     * the original payload. This allows downstream steps (cleansing/enrichment) to continue to use
-     * the original source metadata (e.g. file-upload/S3 identifiers) instead of creating a new API
+     * Replays the cleansing pipeline for an existing CleansedDataStore record
+     * without re-uploading
+     * the original payload. This allows downstream steps (cleansing/enrichment) to
+     * continue to use
+     * the original source metadata (e.g. file-upload/S3 identifiers) instead of
+     * creating a new API
      * payload entry.
      *
      * @param cleansedDataStoreId existing CleansedDataStore identifier.
@@ -385,15 +466,18 @@ public class DataIngestionService {
         }
 
         CleansedDataStore existingCleansed = cleansedDataStoreRepository.findById(cleansedDataStoreId)
-                .orElseThrow(() -> new IllegalArgumentException("No CleansedDataStore found for id " + cleansedDataStoreId));
+                .orElseThrow(
+                        () -> new IllegalArgumentException("No CleansedDataStore found for id " + cleansedDataStoreId));
 
         UUID rawDataId = existingCleansed.getRawDataId();
         if (rawDataId == null) {
-            throw new IllegalStateException("CleansedDataStore " + cleansedDataStoreId + " is missing a rawDataId reference.");
+            throw new IllegalStateException(
+                    "CleansedDataStore " + cleansedDataStoreId + " is missing a rawDataId reference.");
         }
 
         RawDataStore rawDataStore = rawDataStoreRepository.findById(rawDataId)
-                .orElseThrow(() -> new IllegalStateException("RawDataStore " + rawDataId + " referenced by cleansed record " + cleansedDataStoreId + " was not found."));
+                .orElseThrow(() -> new IllegalStateException("RawDataStore " + rawDataId
+                        + " referenced by cleansed record " + cleansedDataStoreId + " was not found."));
 
         String rawJsonContent = rawDataStore.getRawContentText();
         if ((rawJsonContent == null || rawJsonContent.isBlank()) && rawDataStore.getRawContentBinary() != null) {
@@ -401,11 +485,13 @@ public class DataIngestionService {
         }
 
         if (rawJsonContent == null || rawJsonContent.isBlank()) {
-            throw new IllegalStateException("RawDataStore " + rawDataId + " does not contain stored JSON content to resume processing.");
+            throw new IllegalStateException(
+                    "RawDataStore " + rawDataId + " does not contain stored JSON content to resume processing.");
         }
 
-        logger.info("Resuming ingestion pipeline for CleansedDataStore {} using RawDataStore {}", cleansedDataStoreId, rawDataId);
-        //return processLoadedContent(rawJsonContent, rawDataStore);
+        logger.info("Resuming ingestion pipeline for CleansedDataStore {} using RawDataStore {}", cleansedDataStoreId,
+                rawDataId);
+        // return processLoadedContent(rawJsonContent, rawDataStore);
         return processLoadedContent(rawJsonContent, rawDataStore, existingCleansed);
     }
 
@@ -425,37 +511,47 @@ public class DataIngestionService {
         rawDataStoreRepository.save(rawData);
         return cleansedDataStoreRepository.save(existing);
     }
+
     /**
      * Finds an existing RawDataStore or creates a new one for the payload.
      */
     private RawDataStore findOrCreateRawDataStore(String jsonPayload,
-                                                  String sourceIdentifier,
-                                                  UploadRequestMetadata uploadMetadata) {
+            String sourceIdentifier,
+            UploadRequestMetadata uploadMetadata) {
         if (jsonPayload == null || jsonPayload.trim().isEmpty()) {
-            throw new IllegalArgumentException("JSON payload cannot be null or empty for sourceIdentifier " + sourceIdentifier);
+            throw new IllegalArgumentException(
+                    "JSON payload cannot be null or empty for sourceIdentifier " + sourceIdentifier);
         }
 
         String newContentHash = calculateContentHash(jsonPayload, null);
 
-        Optional<RawDataStore> existingMatchingContent =
-                rawDataStoreRepository.findBySourceUriAndContentHash(sourceIdentifier, newContentHash);
+        // System-Wide Payload Hash Deduplication
+        Optional<RawDataStore> existingMatchingContent = rawDataStoreRepository.findByContentHash(newContentHash);
         if (existingMatchingContent.isPresent()) {
             RawDataStore existingRawData = existingMatchingContent.get();
-            logger.info("Ingested content for sourceIdentifier '{}' matches existing raw data ID {}. Skipping new version.",
-                    sourceIdentifier, existingRawData.getId());
+            logger.info(
+                    "Ingested content globally matches existing raw data ID {} (originally from {}). Skipping new version for {}.",
+                    existingRawData.getId(), existingRawData.getSourceUri(), sourceIdentifier);
             backfillPayloadColumnsIfMissing(existingRawData, jsonPayload, uploadMetadata);
-            return rawDataStoreRepository.save(existingRawData);
+            RawDataStore saved = rawDataStoreRepository.save(existingRawData);
+            logIngestionJob(saved, jsonPayload, sourceIdentifier, "SUCCESS_DEDUPLICATED");
+            return saved;
         }
 
         RawDataStore rawDataStore = new RawDataStore();
         rawDataStore.setSourceUri(sourceIdentifier);
+
+        String logicalKey = deriveLogicalKey(jsonPayload, sourceIdentifier);
+        rawDataStore.setLogicalKey(logicalKey);
+
         rawDataStore.setReceivedAt(OffsetDateTime.now());
         rawDataStore.setStatus(resolveUploadStatus(sourceIdentifier));
         rawDataStore.setContentHash(newContentHash);
         rawDataStore.setLatest(true);
         populatePayloadColumns(rawDataStore, jsonPayload, uploadMetadata);
 
-        Optional<RawDataStore> latestVersionOpt = rawDataStoreRepository.findTopBySourceUriOrderByVersionDesc(sourceIdentifier);
+        Optional<RawDataStore> latestVersionOpt = rawDataStoreRepository
+                .findTopByLogicalKeyOrderByVersionDesc(logicalKey);
         if (latestVersionOpt.isPresent()) {
             RawDataStore latestVersion = latestVersionOpt.get();
             int nextVersion = Optional.ofNullable(latestVersion.getVersion()).orElse(0) + 1;
@@ -468,16 +564,56 @@ public class DataIngestionService {
             rawDataStore.setVersion(1);
         }
 
-        logger.info("No matching content found for sourceIdentifier {}. Persisting version {}.", sourceIdentifier, rawDataStore.getVersion());
-        return rawDataStoreRepository.save(rawDataStore);
+        logger.info("No matching content found for sourceIdentifier {}. Persisting version {}.", sourceIdentifier,
+                rawDataStore.getVersion());
+        RawDataStore saved = rawDataStoreRepository.save(rawDataStore);
+        logIngestionJob(saved, jsonPayload, sourceIdentifier, saved.getStatus());
+        return saved;
+    }
+
+    private void logIngestionJob(RawDataStore rawDataStore, String jsonPayload, String sourceIdentifier,
+            String status) {
+        try {
+            com.apple.springboot.model.IngestionJob job = new com.apple.springboot.model.IngestionJob();
+            job.setRawDataId(rawDataStore.getId());
+            job.setUsername("SystemUser"); // Placeholder for persona
+
+            String safeName = "API Payload";
+            if (sourceIdentifier != null) {
+                if (sourceIdentifier.startsWith("file-upload:")) {
+                    safeName = sourceIdentifier.substring("file-upload:".length());
+                } else if (sourceIdentifier.startsWith("s3://")) {
+                    safeName = sourceIdentifier.substring(sourceIdentifier.lastIndexOf('/') + 1);
+                } else {
+                    safeName = sourceIdentifier;
+                }
+            }
+            job.setFileName(safeName);
+            job.setFileSize((long) jsonPayload.getBytes(StandardCharsets.UTF_8).length);
+            job.setSourceChannel(
+                    sourceIdentifier != null && sourceIdentifier.startsWith("file-upload:") ? "Local" : "API");
+
+            // Map raw DB status to UI status visually
+            if (status.contains("ERROR")) {
+                job.setStatus("error");
+            } else {
+                job.setStatus("success");
+            }
+
+            job.setCreatedAt(OffsetDateTime.now());
+            job.setUpdatedAt(OffsetDateTime.now());
+            ingestionJobRepository.save(job);
+        } catch (Exception e) {
+            logger.error("Failed to append IngestionJob tracking row", e);
+        }
     }
 
     /**
      * Populates raw data storage fields from the payload.
      */
     private void populatePayloadColumns(RawDataStore rawDataStore,
-                                        String jsonPayload,
-                                        UploadRequestMetadata uploadMetadata) {
+            String jsonPayload,
+            UploadRequestMetadata uploadMetadata) {
         rawDataStore.setRawContentText(jsonPayload);
         rawDataStore.setRawContentBinary(jsonPayload.getBytes(StandardCharsets.UTF_8));
         rawDataStore.setSourceContentType("application/json");
@@ -489,8 +625,8 @@ public class DataIngestionService {
      * Backfills missing raw payload columns on existing records.
      */
     private void backfillPayloadColumnsIfMissing(RawDataStore rawDataStore,
-                                                 String jsonPayload,
-                                                 UploadRequestMetadata uploadMetadata) {
+            String jsonPayload,
+            UploadRequestMetadata uploadMetadata) {
         if (rawDataStore.getRawContentText() == null) {
             rawDataStore.setRawContentText(jsonPayload);
         }
@@ -565,7 +701,7 @@ public class DataIngestionService {
      * Processes raw content and returns a cleansed data record.
      */
     private CleansedDataStore processLoadedContent(String rawJsonContent,
-                                                   RawDataStore rawDataStore) throws JsonProcessingException {
+            RawDataStore rawDataStore) throws JsonProcessingException {
         return processLoadedContent(rawJsonContent, rawDataStore, null);
     }
 
@@ -573,11 +709,12 @@ public class DataIngestionService {
      * Processes raw content and optionally refreshes an existing cleansed record.
      */
     private CleansedDataStore processLoadedContent(String rawJsonContent,
-                                                   RawDataStore rawDataStore,
-                                                   @Nullable CleansedDataStore existingCleansed) throws JsonProcessingException {
+            RawDataStore rawDataStore,
+            @Nullable CleansedDataStore existingCleansed) throws JsonProcessingException {
         try {
             JsonNode rootNode = objectMapper.readTree(rawJsonContent);
-            // Asset extraction is additive and fail-open; it must never break text ingestion.
+            // Asset extraction is additive and fail-open; it must never break text
+            // ingestion.
             try {
                 assetImageStoreService.safeExtractAndStore(rootNode, rawDataStore);
             } catch (Exception assetError) {
@@ -594,37 +731,42 @@ public class DataIngestionService {
             findAndExtractRecursive(rootNode, "#", rootEnvelope, new Facets(), allExtractedItems, counters);
 
             // Treat version=1 as a "fresh" run for this sourceUri and return all items.
-            // This guards against cases where supporting tables (like content_hashes) were not cleared,
-            // but the ingestion run itself is brand new (e.g., DB truncation of raw/cleansed tables).
+            // This guards against cases where supporting tables (like content_hashes) were
+            // not cleared,
+            // but the ingestion run itself is brand new (e.g., DB truncation of
+            // raw/cleansed tables).
             boolean forceFullRun = rawDataStore.getVersion() != null && rawDataStore.getVersion() == 1;
             if (forceFullRun && !returnAllItems) {
-                logger.info("Version=1 detected for source {}. Forcing full cleanse output (ignoring delta filter for this run).",
+                logger.info(
+                        "Version=1 detected for source {}. Forcing full cleanse output (ignoring delta filter for this run).",
                         rawDataStore.getSourceUri());
             }
 
             List<Map<String, Object>> itemsToProcess;
             if (returnAllItems || forceFullRun) {
-                // Still persist the latest observed hashes so subsequent runs can correctly compute deltas.
+                // Still persist the latest observed hashes so subsequent runs can correctly
+                // compute deltas.
                 persistItemHashes(allExtractedItems);
-                // Also persist hashes for this specific version (optional; safe fallback if table missing).
+                // Also persist hashes for this specific version (optional; safe fallback if
+                // table missing).
                 persistItemVersionHashes(allExtractedItems, rawDataStore);
                 itemsToProcess = allExtractedItems;
             } else {
                 itemsToProcess = filterForChangedItemsAgainstPreviousRaw(allExtractedItems, rawDataStore);
                 // Always persist latest hashes for future runs.
                 persistItemHashes(allExtractedItems);
-                // Also persist hashes for this specific version (optional; safe fallback if table missing).
+                // Also persist hashes for this specific version (optional; safe fallback if
+                // table missing).
                 persistItemVersionHashes(allExtractedItems, rawDataStore);
             }
 
             if (debugCountersEnabled) {
                 long keptPreFilterCopy = counters.copyKept;
                 long keptPreFilterAnalytics = counters.analyticsKept;
-                long keptPostFilterCopy =
-                        itemsToProcess.stream().filter(i -> !isAnalyticsItem(i)).count();
-                long keptPostFilterAnalytics =
-                        itemsToProcess.stream().filter(this::isAnalyticsItem).count();
-                logger.info("Counters: copy found={}, kept(after-cleanse)={}, kept(after-filter)={}; analytics found={}, kept(after-cleanse)={}, kept(after-filter)={}; blank-kept(copy)={}, blank-kept(analytics)={}",
+                long keptPostFilterCopy = itemsToProcess.stream().filter(i -> !isAnalyticsItem(i)).count();
+                long keptPostFilterAnalytics = itemsToProcess.stream().filter(this::isAnalyticsItem).count();
+                logger.info(
+                        "Counters: copy found={}, kept(after-cleanse)={}, kept(after-filter)={}; analytics found={}, kept(after-cleanse)={}, kept(after-filter)={}; blank-kept(copy)={}, blank-kept(analytics)={}",
                         counters.copyFound, keptPreFilterCopy, keptPostFilterCopy,
                         counters.analyticsFound, keptPreFilterAnalytics, keptPostFilterAnalytics,
                         counters.copyBlankKept, counters.analyticsBlankKept);
@@ -634,11 +776,24 @@ public class DataIngestionService {
                 logger.info("No new or updated content to process for raw_data_id: {}", rawDataStore.getId());
                 rawDataStore.setStatus("PROCESSED_NO_CHANGES");
                 rawDataStoreRepository.save(rawDataStore);
-                return existingCleansed != null
+                CleansedDataStore found = existingCleansed != null
                         ? existingCleansed
                         : cleansedDataStoreRepository
-                        .findTopByRawDataIdOrderByCleansedAtDesc(rawDataStore.getId())
-                        .orElse(null);
+                                .findTopByRawDataIdOrderByCleansedAtDesc(rawDataStore.getId())
+                                .orElse(null);
+
+                if (found != null) {
+                    return found;
+                }
+
+                CleansedDataStore emptyStore = new CleansedDataStore();
+                emptyStore.setRawDataId(rawDataStore.getId());
+                emptyStore.setSourceUri(rawDataStore.getSourceUri());
+                emptyStore.setVersion(rawDataStore.getVersion());
+                emptyStore.setCleansedAt(java.time.OffsetDateTime.now());
+                emptyStore.setStatus("PROCESSED_NO_CHANGES");
+                emptyStore.setCleansedItems(java.util.Collections.emptyList());
+                return cleansedDataStoreRepository.save(emptyStore);
             }
 
             return existingCleansed != null
@@ -696,12 +851,14 @@ public class DataIngestionService {
             String newContentHash = (String) item.get("contentHash");
             String newContextHash = (String) item.get("contextHash");
 
-            if (sourcePath == null || itemType == null) continue;
+            if (sourcePath == null || itemType == null)
+                continue;
 
             // The exact record for this (sourcePath,itemType,usagePath).
             ContentHash exactExisting = exactIndex.get(exactKey(sourcePath, itemType, usagePath));
 
-            // For delta detection we may also consider legacy matches if usagePath isn't stable.
+            // For delta detection we may also consider legacy matches if usagePath isn't
+            // stable.
             ContentHash matchForComparison = exactExisting;
             boolean usedLegacyFallback = false;
             if (matchForComparison == null && !strictUsagePath) {
@@ -709,21 +866,43 @@ public class DataIngestionService {
                 String lk = legacyKey(sourcePath, itemType);
                 matchForComparison = legacyIndex.get(lk);
                 if (matchForComparison != null) {
-                    logger.debug("Change detection fallback matched by (sourcePath,itemType) without usagePath for {} :: {}", sourcePath, itemType);
+                    logger.debug(
+                            "Change detection fallback matched by (sourcePath,itemType) without usagePath for {} :: {}",
+                            sourcePath, itemType);
                 }
             }
+
+            boolean skipEnrichment = Boolean.TRUE.equals(item.get("skipEnrichment"));
 
             boolean contentChanged = matchForComparison == null
                     || !Objects.equals(matchForComparison.getContentHash(), newContentHash);
             boolean contextChanged = considerContextChange && (matchForComparison == null
                     || !Objects.equals(matchForComparison.getContextHash(), newContextHash));
 
-            if (matchForComparison == null || contentChanged || contextChanged) {
+            if (skipEnrichment) {
+                // For skipped items, contentHash might be unstable due to blanking.
+                // Rely on contextHash (which contains originalValue) for delta syncs.
+                if (matchForComparison == null
+                        || !Objects.equals(matchForComparison.getContextHash(), newContextHash)) {
+                    // Even if it's new to this specific sourcePath, check globally before allowing
+                    // it
+                    String cleansedText = (String) item.get("cleansedContent");
+                    String fieldName = (String) item.get("originalFieldName");
+                    if (fieldName != null && cleansedText != null &&
+                            enrichedContentElementRepository
+                                    .existsByItemOriginalFieldNameAndCleansedText(fieldName, cleansedText)) {
+                        // Exists globally in another locale/path, skip it
+                        continue;
+                    }
+                    changedItems.add(item);
+                }
+            } else if (contentChanged || contextChanged) {
                 changedItems.add(item);
             }
 
             // Always persist/update the hash for the *current* usagePath.
-            // IMPORTANT: never overwrite a different usagePath row just because legacy fallback matched.
+            // IMPORTANT: never overwrite a different usagePath row just because legacy
+            // fallback matched.
             ContentHash hashToSave = exactExisting != null
                     ? exactExisting
                     : new ContentHash(sourcePath, itemType, usagePath, null, null);
@@ -740,11 +919,13 @@ public class DataIngestionService {
     }
 
     /**
-     * Computes delta items by comparing against the previous raw JSON version for this sourceUri.
-     * This avoids false "no changes" results when the content_hashes table is out-of-sync or shared.
+     * Computes delta items by comparing against the previous raw JSON version for
+     * this sourceUri.
+     * This avoids false "no changes" results when the content_hashes table is
+     * out-of-sync or shared.
      */
     private List<Map<String, Object>> filterForChangedItemsAgainstPreviousRaw(List<Map<String, Object>> allItems,
-                                                                              RawDataStore currentRaw) {
+            RawDataStore currentRaw) {
         if (allItems == null || allItems.isEmpty()) {
             return Collections.emptyList();
         }
@@ -758,20 +939,25 @@ public class DataIngestionService {
             return allItems;
         }
 
-        Optional<RawDataStore> prevOpt =
-                rawDataStoreRepository.findTopBySourceUriAndVersionLessThanOrderByVersionDesc(currentRaw.getSourceUri(), version);
+        String lookupKey = currentRaw.getLogicalKey() != null ? currentRaw.getLogicalKey() : currentRaw.getSourceUri();
+        Optional<RawDataStore> prevOpt = currentRaw.getLogicalKey() != null
+                ? rawDataStoreRepository.findTopByLogicalKeyAndVersionLessThanOrderByVersionDesc(lookupKey, version)
+                : rawDataStoreRepository.findTopBySourceUriAndVersionLessThanOrderByVersionDesc(lookupKey, version);
+
         if (prevOpt.isEmpty()) {
             return filterForChangedItems(allItems);
         }
 
-        // Prefer persisted per-item hashes for the previous version (fast + does not depend on raw JSON retention).
+        // Prefer persisted per-item hashes for the previous version (fast + does not
+        // depend on raw JSON retention).
         if (usePersistedVersionHashes) {
             Integer prevVersion = prevOpt.get().getVersion();
-            List<ItemVersionHash> prevHashes = itemVersionHashStore.safeLoad(currentRaw.getSourceUri(), prevVersion);
+            List<ItemVersionHash> prevHashes = itemVersionHashStore.safeLoad(prevOpt.get().getSourceUri(), prevVersion);
             if (prevHashes != null && !prevHashes.isEmpty()) {
                 Map<String, ItemVersionHash> prevIndex = new HashMap<>(Math.max(16, prevHashes.size() * 2));
                 for (ItemVersionHash h : prevHashes) {
-                    if (h == null || h.getSourcePath() == null || h.getItemType() == null) continue;
+                    if (h == null || h.getSourcePath() == null || h.getItemType() == null)
+                        continue;
                     prevIndex.put(exactKey(h.getSourcePath(), h.getItemType(), h.getUsagePath()), h);
                 }
 
@@ -780,7 +966,8 @@ public class DataIngestionService {
                     String sourcePath = (String) item.get("sourcePath");
                     String itemType = (String) item.get("itemType");
                     String usagePath = (String) item.get("usagePath");
-                    if (sourcePath == null || itemType == null) continue;
+                    if (sourcePath == null || itemType == null)
+                        continue;
 
                     ItemVersionHash prev = prevIndex.get(exactKey(sourcePath, itemType, usagePath));
                     String newContentHash = (String) item.get("contentHash");
@@ -788,9 +975,29 @@ public class DataIngestionService {
                     String oldContentHash = prev != null ? prev.getContentHash() : null;
                     String oldContextHash = prev != null ? prev.getContextHash() : null;
 
+                    boolean skipEnrichment = Boolean.TRUE.equals(item.get("skipEnrichment"));
+
                     boolean contentChanged = prev == null || !Objects.equals(oldContentHash, newContentHash);
-                    boolean contextChanged = considerContextChange && (prev == null || !Objects.equals(oldContextHash, newContextHash));
-                    if (contentChanged || contextChanged) {
+                    boolean contextChanged = considerContextChange
+                            && (prev == null || !Objects.equals(oldContextHash, newContextHash));
+
+                    if (skipEnrichment) {
+                        // For skipped items, contentHash might be unstable due to blanking.
+                        // Rely on contextHash (which contains originalValue) for delta syncs.
+                        if (prev == null || !Objects.equals(oldContextHash, newContextHash)) {
+                            // Even if it's new to this specific sourcePath, check globally before allowing
+                            // it
+                            String cleansedText = (String) item.get("cleansedContent");
+                            String fieldName = (String) item.get("originalFieldName");
+                            if (fieldName != null && cleansedText != null &&
+                                    enrichedContentElementRepository
+                                            .existsByItemOriginalFieldNameAndCleansedText(fieldName, cleansedText)) {
+                                // Exists globally in another locale/path, skip it
+                                continue;
+                            }
+                            changed.add(item);
+                        }
+                    } else if (contentChanged || contextChanged) {
                         changed.add(item);
                     }
                 }
@@ -813,7 +1020,8 @@ public class DataIngestionService {
             String sourcePath = (String) item.get("sourcePath");
             String itemType = (String) item.get("itemType");
             String usagePath = (String) item.get("usagePath");
-            if (sourcePath == null || itemType == null) continue;
+            if (sourcePath == null || itemType == null)
+                continue;
             prevIndex.put(exactKey(sourcePath, itemType, usagePath), item);
         }
 
@@ -822,7 +1030,8 @@ public class DataIngestionService {
             String sourcePath = (String) item.get("sourcePath");
             String itemType = (String) item.get("itemType");
             String usagePath = (String) item.get("usagePath");
-            if (sourcePath == null || itemType == null) continue;
+            if (sourcePath == null || itemType == null)
+                continue;
 
             Map<String, Object> prev = prevIndex.get(exactKey(sourcePath, itemType, usagePath));
             String newContentHash = (String) item.get("contentHash");
@@ -830,9 +1039,17 @@ public class DataIngestionService {
             String oldContentHash = prev != null ? (String) prev.get("contentHash") : null;
             String oldContextHash = prev != null ? (String) prev.get("contextHash") : null;
 
+            boolean skipEnrichment = Boolean.TRUE.equals(item.get("skipEnrichment"));
+
             boolean contentChanged = prev == null || !Objects.equals(oldContentHash, newContentHash);
-            boolean contextChanged = considerContextChange && (prev == null || !Objects.equals(oldContextHash, newContextHash));
-            if (contentChanged || contextChanged) {
+            boolean contextChanged = considerContextChange
+                    && (prev == null || !Objects.equals(oldContextHash, newContextHash));
+
+            if (skipEnrichment) {
+                if (prev == null || !Objects.equals(oldContextHash, newContextHash)) {
+                    changed.add(item);
+                }
+            } else if (contentChanged || contextChanged) {
                 changed.add(item);
             }
         }
@@ -860,7 +1077,8 @@ public class DataIngestionService {
     }
 
     /**
-     * Persists item hashes for the current run (for troubleshooting and optional consumers).
+     * Persists item hashes for the current run (for troubleshooting and optional
+     * consumers).
      * Delta computation should not depend on this being perfectly in-sync.
      */
     private void persistItemHashes(List<Map<String, Object>> allItems) {
@@ -869,13 +1087,15 @@ public class DataIngestionService {
         }
         List<ContentHash> toSave = new ArrayList<>(allItems.size());
         for (Map<String, Object> item : allItems) {
-            if (item == null) continue;
+            if (item == null)
+                continue;
             String sourcePath = (String) item.get("sourcePath");
             String itemType = (String) item.get("itemType");
             String usagePath = (String) item.get("usagePath");
             String contentHash = (String) item.get("contentHash");
             String contextHash = (String) item.get("contextHash");
-            if (sourcePath == null || itemType == null) continue;
+            if (sourcePath == null || itemType == null)
+                continue;
             // usagePath is part of the entity key; normalize null to empty for safety
             String up = (usagePath == null) ? "" : usagePath;
             ContentHash ch = new ContentHash(sourcePath, itemType, up, contentHash, contextHash);
@@ -887,8 +1107,10 @@ public class DataIngestionService {
     }
 
     /**
-     * Persists per-item hashes per (sourceUri, version). This is additive and best-effort:
-     * - If the backing table isn't present yet, we swallow the failure and keep the pipeline running.
+     * Persists per-item hashes per (sourceUri, version). This is additive and
+     * best-effort:
+     * - If the backing table isn't present yet, we swallow the failure and keep the
+     * pipeline running.
      * - Delta comparison will fall back to the previous-raw comparison path.
      */
     private void persistItemVersionHashes(List<Map<String, Object>> allItems, RawDataStore rawDataStore) {
@@ -904,13 +1126,15 @@ public class DataIngestionService {
 
         List<ItemVersionHash> toSave = new ArrayList<>(allItems.size());
         for (Map<String, Object> item : allItems) {
-            if (item == null) continue;
+            if (item == null)
+                continue;
             String sourcePath = (String) item.get("sourcePath");
             String itemType = (String) item.get("itemType");
             String usagePath = (String) item.get("usagePath");
             String contentHash = (String) item.get("contentHash");
             String contextHash = (String) item.get("contextHash");
-            if (sourcePath == null || itemType == null || contentHash == null) continue;
+            if (sourcePath == null || itemType == null || contentHash == null)
+                continue;
 
             String up = (usagePath == null) ? "" : usagePath;
             toSave.add(new ItemVersionHash(
@@ -920,8 +1144,7 @@ public class DataIngestionService {
                     itemType,
                     up,
                     contentHash,
-                    contextHash
-            ));
+                    contextHash));
         }
 
         if (!toSave.isEmpty()) {
@@ -962,7 +1185,8 @@ public class DataIngestionService {
     /**
      * Traverses the JSON tree and extracts content items with context.
      */
-    private void findAndExtractRecursive(JsonNode currentNode, String parentFieldName, Envelope parentEnvelope, Facets parentFacets, List<Map<String, Object>> results, IngestionCounters counters) {
+    private void findAndExtractRecursive(JsonNode currentNode, String parentFieldName, Envelope parentEnvelope,
+            Facets parentFacets, List<Map<String, Object>> results, IngestionCounters counters) {
         if (currentNode.isObject()) {
             Envelope currentEnvelope = buildCurrentEnvelope(currentNode, parentEnvelope);
             Facets currentFacets = buildCurrentFacets(currentNode, parentFacets);
@@ -989,8 +1213,8 @@ public class DataIngestionService {
                 String containerPath = (parentEnvelope != null
                         && parentEnvelope.getSourcePath() != null
                         && !parentEnvelope.getSourcePath().equals(fragmentPath))
-                        ? parentEnvelope.getSourcePath()
-                        : null;
+                                ? parentEnvelope.getSourcePath()
+                                : null;
                 String usagePath = (containerPath != null)
                         ? containerPath + USAGE_REF_DELIM + fragmentPath
                         : fragmentPath;
@@ -1000,36 +1224,48 @@ public class DataIngestionService {
                         currentEnvelope.setUsagePath(usagePath);
                         // If the key is "copy", use the parent's name. Otherwise, use the key itself.
                         String effectiveFieldName = fieldKey.equals("copy") ? parentFieldName : fieldKey;
-                        processContentField(fieldValue.asText(), effectiveFieldName, currentEnvelope, currentFacets, results, counters, false);// copy object
+                        processContentField(fieldValue.asText(), effectiveFieldName, currentEnvelope, currentFacets,
+                                results, counters, false);// copy object
                     } else if (fieldValue.isObject() && fieldValue.has("copy") && fieldValue.get("copy").isTextual()) {
                         Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
                         contentEnv.setUsagePath(usagePath);
-                        processContentField(fieldValue.get("copy").asText(), fieldKey, contentEnv, currentFacets, results, counters, false);
+                        processContentField(fieldValue.get("copy").asText(), fieldKey, contentEnv, currentFacets,
+                                results, counters, false);
 
                         // text object
                     } else if (fieldValue.isObject() && fieldValue.has("text") && fieldValue.get("text").isTextual()) {
                         Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
                         contentEnv.setUsagePath(usagePath);
-                        processContentField(fieldValue.get("text").asText(), fieldKey, contentEnv, currentFacets, results, counters, false);
+                        processContentField(fieldValue.get("text").asText(), fieldKey, contentEnv, currentFacets,
+                                results, counters, false);
 
                         // url object (string value)
                     } else if (fieldValue.isObject() && fieldValue.has("url") && fieldValue.get("url").isTextual()) {
                         Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
                         contentEnv.setUsagePath(usagePath);
-                        processContentField(fieldValue.get("url").asText(), fieldKey, contentEnv, currentFacets, results, counters, false);
+                        processContentField(fieldValue.get("url").asText(), fieldKey, contentEnv, currentFacets,
+                                results, counters, false);
                     }
-//                    else if (fieldValue.isObject() && fieldValue.has("copy") && fieldValue.get("copy").isTextual()) {
-//                        currentEnvelope.setUsagePath(usagePath);
-//                        // This is a nested content fragment. Use the outer envelope's field name (fieldKey).
-//                        // If this object is under a URL, it would have been returned above. Here we are safe.
-//                        processContentField(fieldValue.get("copy").asText(), fieldKey, currentEnvelope, currentFacets, results, counters, false);
-//                    } else if (fieldValue.isObject() && fieldValue.has("text") && fieldValue.get("text").isTextual()) {
-//                        currentEnvelope.setUsagePath(usagePath);
-//                        processContentField(fieldValue.get("text").asText(), fieldKey, currentEnvelope, currentFacets, results, counters, false);
-//                    } else if (fieldValue.isObject() && fieldValue.has("url") && fieldValue.get("url").isTextual()) {
-//                        currentEnvelope.setUsagePath(usagePath);
-//                        processContentField(fieldValue.get("url").asText(), fieldKey, currentEnvelope, currentFacets, results, counters, false);
-                    //   }
+                    // else if (fieldValue.isObject() && fieldValue.has("copy") &&
+                    // fieldValue.get("copy").isTextual()) {
+                    // currentEnvelope.setUsagePath(usagePath);
+                    // // This is a nested content fragment. Use the outer envelope's field name
+                    // (fieldKey).
+                    // // If this object is under a URL, it would have been returned above. Here we
+                    // are safe.
+                    // processContentField(fieldValue.get("copy").asText(), fieldKey,
+                    // currentEnvelope, currentFacets, results, counters, false);
+                    // } else if (fieldValue.isObject() && fieldValue.has("text") &&
+                    // fieldValue.get("text").isTextual()) {
+                    // currentEnvelope.setUsagePath(usagePath);
+                    // processContentField(fieldValue.get("text").asText(), fieldKey,
+                    // currentEnvelope, currentFacets, results, counters, false);
+                    // } else if (fieldValue.isObject() && fieldValue.has("url") &&
+                    // fieldValue.get("url").isTextual()) {
+                    // currentEnvelope.setUsagePath(usagePath);
+                    // processContentField(fieldValue.get("url").asText(), fieldKey,
+                    // currentEnvelope, currentFacets, results, counters, false);
+                    // }
                     else if (fieldValue.isArray()) {
                         if ("disclaimers".equals(fieldKey)) {
                             int groupIndex = 0;
@@ -1039,8 +1275,10 @@ public class DataIngestionService {
                                     for (JsonNode item : element.get("items")) {
                                         if (item.isObject() && item.has("copy") && item.get("copy").isTextual()) {
                                             currentEnvelope.setUsagePath(usagePath);
-                                            String uniqueFieldName = "disclaimer[" + groupIndex + "][" + itemIndex + "]";
-                                            processContentField(item.get("copy").asText(), uniqueFieldName, currentEnvelope, currentFacets, results, counters, false);
+                                            String uniqueFieldName = "disclaimer[" + groupIndex + "][" + itemIndex
+                                                    + "]";
+                                            processContentField(item.get("copy").asText(), uniqueFieldName,
+                                                    currentEnvelope, currentFacets, results, counters, false);
                                         }
                                         itemIndex++;
                                     }
@@ -1052,19 +1290,24 @@ public class DataIngestionService {
                             for (JsonNode element : fieldValue) {
                                 if (element.isTextual()) {
                                     currentEnvelope.setUsagePath(usagePath);
-                                    processContentField(element.asText(), fieldKey + "[" + idx + "]", currentEnvelope, currentFacets, results, counters, false);
-                                } else if (element.isObject() && element.has("copy") && element.get("copy").isTextual()) {
+                                    processContentField(element.asText(), fieldKey + "[" + idx + "]", currentEnvelope,
+                                            currentFacets, results, counters, false);
+                                } else if (element.isObject() && element.has("copy")
+                                        && element.get("copy").isTextual()) {
                                     currentEnvelope.setUsagePath(usagePath);
-                                    processContentField(element.get("copy").asText(), fieldKey + "[" + idx + "]", currentEnvelope, currentFacets, results, counters, false);
+                                    processContentField(element.get("copy").asText(), fieldKey + "[" + idx + "]",
+                                            currentEnvelope, currentFacets, results, counters, false);
                                 }
                                 idx++;
                             }
                         }
                     } else {
                         currentEnvelope.setUsagePath(usagePath);
-                        findAndExtractRecursive(fieldValue, fieldKey, currentEnvelope, currentFacets, results, counters);
+                        findAndExtractRecursive(fieldValue, fieldKey, currentEnvelope, currentFacets, results,
+                                counters);
                     }
                 } else if (fieldKey.toLowerCase().contains("analytics")) {
+                    currentEnvelope.setUsagePath(usagePath);
                     processAnalyticsNode(fieldValue, fieldKey, currentEnvelope, currentFacets, results, counters);
                 } else if (fieldValue.isObject() || fieldValue.isArray()) {
                     currentEnvelope.setUsagePath(usagePath);
@@ -1077,21 +1320,24 @@ public class DataIngestionService {
                 Facets newFacets = new Facets();
                 newFacets.putAll(parentFacets);
                 newFacets.put("sectionIndex", String.valueOf(i));
-                // When recursing into an array, the parent field name is the one that pointed to the array
+                // When recursing into an array, the parent field name is the one that pointed
+                // to the array
                 findAndExtractRecursive(arrayElement, parentFieldName, parentEnvelope, newFacets, results, counters);
             }
         }
     }
-
 
     /**
      * Builds an envelope object by inheriting and overriding parent context.
      */
     private Envelope buildCurrentEnvelope(JsonNode currentNode, Envelope parentEnvelope) {
         Envelope currentEnvelope = new Envelope();
-        // Prefer JSON `_path` when it's a real CMS/content path, but do NOT let it override the
-        // ingestion source identifier when `_path` is itself a synthetic source label (e.g. "file-upload:...").
-        // This keeps derived keys (content_hashes / item_version_hashes) consistent with Raw/Cleansed stores.
+        // Prefer JSON `_path` when it's a real CMS/content path, but do NOT let it
+        // override the
+        // ingestion source identifier when `_path` is itself a synthetic source label
+        // (e.g. "file-upload:...").
+        // This keeps derived keys (content_hashes / item_version_hashes) consistent
+        // with Raw/Cleansed stores.
         String parentPath = parentEnvelope != null ? parentEnvelope.getSourcePath() : null;
         String path = parentPath;
         if (currentNode != null && currentNode.has("_path")) {
@@ -1106,7 +1352,9 @@ public class DataIngestionService {
 
         if (currentNode.has("_provenance")) {
             try {
-                Map<String, String> provenanceMap = objectMapper.convertValue(currentNode.get("_provenance"), new com.fasterxml.jackson.core.type.TypeReference<Map<String, String>>() {});
+                Map<String, String> provenanceMap = objectMapper.convertValue(currentNode.get("_provenance"),
+                        new com.fasterxml.jackson.core.type.TypeReference<Map<String, String>>() {
+                        });
                 currentEnvelope.setProvenance(provenanceMap);
             } catch (IllegalArgumentException e) {
                 logger.warn("Could not parse _provenance field as a Map for path: {}", path, e);
@@ -1118,11 +1366,11 @@ public class DataIngestionService {
 
         if (path != null) {
             Matcher matcher = LOCALE_PATTERN.matcher(path);
-            //cover /en_US/, /en_US, /en-US/, and /en-US.
+            // cover /en_US/, /en_US, /en-US/, and /en-US.
             if (matcher.find()) {
-                String language = matcher.group(1);         // "en"
-                String country  = matcher.group(2);         // "US"
-                String locale   = language + "_" + country;
+                String language = matcher.group(1); // "en"
+                String country = matcher.group(2); // "US"
+                String locale = language + "_" + country;
                 currentEnvelope.setLocale(locale);
                 currentEnvelope.setLanguage(language);
                 currentEnvelope.setCountry(country);
@@ -1145,7 +1393,7 @@ public class DataIngestionService {
         currentFacets.putAll(parentFacets);
         currentFacets.remove("copy"); // Remove generic copy if it exists
         currentFacets.remove("text"); // Avoid duplicating extracted text
-        currentFacets.remove("url");  // Avoid duplicating extracted url text
+        currentFacets.remove("url"); // Avoid duplicating extracted url text
         currentNode.fields().forEachRemaining(entry -> {
             JsonNode value = entry.getValue();
             String key = entry.getKey();
@@ -1163,19 +1411,26 @@ public class DataIngestionService {
     /**
      * Processes a content field into a cleansed item with context.
      */
-    private void processContentField(String content, String fieldKey, Envelope envelope, Facets facets, List<Map<String, Object>> results, IngestionCounters counters, boolean isAnalytics) {
+    private void processContentField(String content, String fieldKey, Envelope envelope, Facets facets,
+            List<Map<String, Object>> results, IngestionCounters counters, boolean isAnalytics) {
         boolean skipEnrichment = isExcluded(fieldKey);
         String cleansedContent = cleanseCopyText(content);
-        if (isAnalytics) counters.analyticsFound++; else counters.copyFound++;
+        if (isAnalytics)
+            counters.analyticsFound++;
+        else
+            counters.copyFound++;
 
         boolean isBlankAfterCleanse = cleansedContent == null || cleansedContent.isBlank();
         boolean keep = cleansedContent != null && (!isBlankAfterCleanse || keepBlankAfterCleanse);
         if (keep && isBlankAfterCleanse) {
-            if (isAnalytics) counters.analyticsBlankKept++; else counters.copyBlankKept++;
+            if (isAnalytics)
+                counters.analyticsBlankKept++;
+            else
+                counters.copyBlankKept++;
         }
 
         if (keep) {
-            //facets.putAll(facets);
+            // facets.putAll(facets);
             facets.put("cleansedCopy", cleansedContent);
 
             String lowerCaseContent = cleansedContent.toLowerCase();
@@ -1198,14 +1453,19 @@ public class DataIngestionService {
             item.put("originalValue", content);
             item.put("cleansedValue", cleansedContent);
             try {
-                item.put("context", objectMapper.convertValue(finalContext, new com.fasterxml.jackson.core.type.TypeReference<>() {}));
+                item.put("context",
+                        objectMapper.convertValue(finalContext, new com.fasterxml.jackson.core.type.TypeReference<>() {
+                        }));
                 // Ensure stable property and map ordering when hashing
                 item.put("contextHash", calculateContentHash(objectMapper.writeValueAsString(finalContext), null));
             } catch (JsonProcessingException e) {
                 logger.error("Failed to process context for hashing", e);
             }
             results.add(item);
-            if (isAnalytics) counters.analyticsKept++; else counters.copyKept++;
+            if (isAnalytics)
+                counters.analyticsKept++;
+            else
+                counters.copyKept++;
         }
     }
 
@@ -1221,8 +1481,9 @@ public class DataIngestionService {
      * Recursively extracts analytics fields from nested structures.
      */
     private void processAnalyticsNode(JsonNode node, String fieldKey, Envelope env, Facets facets,
-                                      List<Map<String, Object>> results, IngestionCounters counters) {
-        if (node == null || node.isNull()) return;
+            List<Map<String, Object>> results, IngestionCounters counters) {
+        if (node == null || node.isNull())
+            return;
 
         if (node.isTextual() || node.isNumber() || node.isBoolean()) {
             processContentField(node.asText(), fieldKey, env, facets, results, counters, true);
@@ -1235,15 +1496,22 @@ public class DataIngestionService {
             if (valueNode != null && !valueNode.isNull()) {
                 processContentField(valueNode.asText(), fieldKey, analyticsEnvelope, facets, results, counters, true);
             }
-            for (String k : List.of("items","children","child")) {
+            for (String k : List.of("items", "children", "child")) {
                 JsonNode arr = node.get(k);
                 if (arr != null && arr.isArray()) {
-                    for (JsonNode child : arr) processAnalyticsNode(child, fieldKey, analyticsEnvelope, facets, results, counters);
+                    int idx = 0;
+                    for (JsonNode child : arr) {
+                        String childFieldKey = fieldKey + "[" + k + "][" + idx + "]";
+                        processAnalyticsNode(child, childFieldKey, analyticsEnvelope, facets, results, counters);
+                        idx++;
+                    }
                 }
             }
             node.fields().forEachRemaining(e -> {
-                if (!List.of("items","children","child","value").contains(e.getKey())) {
-                    processAnalyticsNode(e.getValue(), fieldKey, analyticsEnvelope, facets, results, counters);
+                if (!List.of("items", "children", "child", "value", "_id", "_model", "_path")
+                        .contains(e.getKey())) {
+                    String childFieldKey = fieldKey + "[" + e.getKey() + "]";
+                    processAnalyticsNode(e.getValue(), childFieldKey, analyticsEnvelope, facets, results, counters);
                 }
             });
             return;
@@ -1255,9 +1523,10 @@ public class DataIngestionService {
                 if (el.isObject()) {
                     Envelope elEnv = buildCurrentEnvelope(el, env);
                     String name = el.path("name").asText(null);
-                    String val  = el.path("value").asText(null);
+                    String val = el.path("value").asText(null);
                     if (val != null && !val.isBlank()) {
-                        String key = (name != null && !name.isBlank()) ? "analytics[" + name + "]" : "analytics[" + i + "]";
+                        String key = (name != null && !name.isBlank()) ? "analytics[" + name + "]"
+                                : "analytics[" + i + "]";
                         processContentField(val, key, elEnv, facets, results, counters, true);
                     }
                 } else if (el.isTextual()) {
@@ -1272,7 +1541,8 @@ public class DataIngestionService {
      * Computes a SHA-256 hash for content and optional context.
      */
     private String calculateContentHash(String content, String context) {
-        if (content == null) return null; // Allow hashing of empty strings to differentiate from null
+        if (content == null)
+            return null; // Allow hashing of empty strings to differentiate from null
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             digest.update(content.getBytes(StandardCharsets.UTF_8));
@@ -1293,7 +1563,8 @@ public class DataIngestionService {
         StringBuilder hexString = new StringBuilder(2 * hash.length);
         for (byte b : hash) {
             String hex = Integer.toHexString(0xff & b);
-            if (hex.length() == 1) hexString.append('0');
+            if (hex.length() == 1)
+                hexString.append('0');
             hexString.append(hex);
         }
         return hexString.toString();
@@ -1302,7 +1573,8 @@ public class DataIngestionService {
     /**
      * Creates and persists an error cleansed record with the supplied status.
      */
-    private CleansedDataStore createAndSaveErrorCleansedDataStore(RawDataStore rawDataStore, String cleansedStatus, String errorMessage, String specificErrorMessage) {
+    private CleansedDataStore createAndSaveErrorCleansedDataStore(RawDataStore rawDataStore, String cleansedStatus,
+            String errorMessage, String specificErrorMessage) {
         CleansedDataStore errorCleansedData = new CleansedDataStore();
         if (rawDataStore != null) {
             errorCleansedData.setRawDataId(rawDataStore.getId());
@@ -1319,7 +1591,8 @@ public class DataIngestionService {
      * Removes placeholders and HTML tags from copy text.
      */
     private static String cleanseCopyText(String text) {
-        if (text == null) return null;
+        if (text == null)
+            return null;
         String cleansed = text;
         // Targeted replacements based on requested patterns
         cleansed = NBSP_PATTERN.matcher(cleansed).replaceAll(" ");
@@ -1345,7 +1618,8 @@ public class DataIngestionService {
      * Returns true if the key represents an image-related node.
      */
     private boolean isImageNodeKey(String key) {
-        if (key == null) return false;
+        if (key == null)
+            return false;
         String lower = key.toLowerCase();
         return lower.contains("image") || lower.contains("backgroundimage");
     }
@@ -1354,10 +1628,12 @@ public class DataIngestionService {
      * Flattens icon metadata into the facets map.
      */
     private void enrichFacetsWithIconProperties(JsonNode iconNode, String prefix, Facets targetFacets) {
-        if (iconNode == null || iconNode.isNull()) return;
+        if (iconNode == null || iconNode.isNull())
+            return;
         iconNode.fields().forEachRemaining(entry -> {
             String key = entry.getKey();
-            if (key.startsWith("_") && !ICON_META_KEYS.contains(key)) return;
+            if (key.startsWith("_") && !ICON_META_KEYS.contains(key))
+                return;
             JsonNode value = entry.getValue();
             String facetKey = (prefix == null || prefix.isBlank()) ? key : prefix + "." + key;
             if (value.isValueNode()) {
@@ -1372,10 +1648,12 @@ public class DataIngestionService {
      * Flattens image metadata into the facets map.
      */
     private void enrichFacetsWithImageProperties(JsonNode imageNode, String prefix, Facets targetFacets) {
-        if (imageNode == null || imageNode.isNull()) return;
+        if (imageNode == null || imageNode.isNull())
+            return;
         imageNode.fields().forEachRemaining(entry -> {
             String key = entry.getKey();
-            if (key.startsWith("_") && !IMAGE_META_KEYS.contains(key)) return;
+            if (key.startsWith("_") && !IMAGE_META_KEYS.contains(key))
+                return;
             JsonNode value = entry.getValue();
             String facetKey = (prefix == null || prefix.isBlank()) ? key : prefix + "." + key;
             if (value.isValueNode()) {
@@ -1429,5 +1707,39 @@ public class DataIngestionService {
         long analyticsKept = 0;
         long copyBlankKept = 0;
         long analyticsBlankKept = 0;
+    }
+
+    /**
+     * Attempts to derive a Logical Business Key from the payload to group versions
+     * regardless of the transport channel.
+     */
+    private String deriveLogicalKey(String jsonPayload, String fallbackSource) {
+        if (jsonPayload == null)
+            return fallbackSource;
+        try {
+            JsonNode root = objectMapper.readTree(jsonPayload);
+            JsonNode context = root.path("context");
+            if (!context.isMissingNode()) {
+                JsonNode envelope = context.path("envelope");
+                if (!envelope.isMissingNode()) {
+                    String tenant = envelope.path("tenant").asText("");
+                    String pageId = envelope.path("pageId").asText("");
+                    String locale = envelope.path("locale").asText("");
+                    if (!tenant.isEmpty() || !pageId.isEmpty() || !locale.isEmpty()) {
+                        return String.join("|", tenant, pageId, locale);
+                    }
+                }
+            }
+            // Fallback for flat metadata
+            String tenant = root.path("tenant").asText("");
+            String pageId = root.path("pageId").asText("");
+            String locale = root.path("locale").asText("");
+            if (!tenant.isEmpty() || !pageId.isEmpty() || !locale.isEmpty()) {
+                return String.join("|", tenant, pageId, locale);
+            }
+        } catch (Exception e) {
+            logger.warn("Could not parse logical key from JSON payload, falling back to source URI.", e);
+        }
+        return fallbackSource;
     }
 }

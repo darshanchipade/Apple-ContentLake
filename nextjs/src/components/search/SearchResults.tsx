@@ -78,6 +78,8 @@ export function SearchResults({ results, isLoading, onFilter }: SearchResultsPro
             (result.cleansedText as string) ??
             (result.snippet as string) ??
             "";
+          const tags = Array.isArray(result.tags) ? (result.tags as string[]) : [];
+          const keywords = Array.isArray(result.keywords) ? (result.keywords as string[]) : [];
           const resultId = result.id ?? String(index);
 
           return (
@@ -125,12 +127,37 @@ export function SearchResults({ results, isLoading, onFilter }: SearchResultsPro
 
               <div className="text-[12px] leading-[20px] text-[#4d4d4d]">{content}</div>
 
+              {(tags.length > 0 || keywords.length > 0) && (
+                <div className="flex flex-col gap-2 mt-2 border-t border-slate-100 pt-3">
+                  {tags.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] font-semibold text-[#737780] w-[60px]">Tags</span>
+                      {tags.map((tag, i) => (
+                        <span key={i} className="px-2 py-0.5 bg-blue-50 text-blue-700 text-[11px] font-medium rounded-md border border-blue-100">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {keywords.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] font-semibold text-[#737780] w-[60px]">Keywords</span>
+                      {keywords.map((kw, i) => (
+                        <span key={i} className="px-2 py-0.5 bg-purple-50 text-purple-700 text-[11px] font-medium rounded-md border border-purple-100">
+                          {kw}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div>
                 <button
                   type="button"
                   onClick={() => copyToClipboard(content, resultId)}
                   className={clsx(
-                    "relative rounded-[24px] transition-all duration-200",
+                    "relative rounded-[24px] transition-all duration-200 mt-2",
                     copiedStates[resultId] ? "bg-gray-50" : "bg-white hover:bg-gray-50",
                   )}
                 >

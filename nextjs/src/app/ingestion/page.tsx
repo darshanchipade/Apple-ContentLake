@@ -249,13 +249,19 @@ export default function IngestionPage() {
     const loadHistory = async () => {
       try {
         const response = await fetch("/api/ingestion/history", { cache: "no-store" });
-        if (!response.ok) throw new Error("Failed to load history");
+        if (!response.ok) {
+          if (!cancelled) {
+            setUploads([]);
+            setHistoryHydrated(true);
+          }
+          return;
+        }
         const data = await response.json();
         if (cancelled) return;
         setUploads(data as UploadHistoryItem[]);
         setHistoryHydrated(true);
-      } catch (e) {
-        console.error("Failed to load history from API", e);
+      } catch (e: any) {
+        console.warn("Failed to load history from API", e.message);
         if (!cancelled) setHistoryHydrated(true);
       }
     };

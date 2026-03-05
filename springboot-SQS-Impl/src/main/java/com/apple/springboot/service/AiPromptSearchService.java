@@ -23,8 +23,8 @@ public class AiPromptSearchService {
     private static final Logger log = LoggerFactory.getLogger(AiPromptSearchService.class);
     private static final int LOG_VALUE_LIMIT = 500;
 
-    private static final Pattern SECTION_KEY_PATTERN =
-            Pattern.compile("(?i)\\b([a-z0-9]+(?:-[a-z0-9]+)*)-section(?:-[a-z0-9]+)*\\b");
+    private static final Pattern SECTION_KEY_PATTERN = Pattern
+            .compile("(?i)\\b([a-z0-9]+(?:-[a-z0-9]+)*)-section(?:-[a-z0-9]+)*\\b");
 
     private final BedrockEnrichmentService bedrockEnrichmentService;
     private final VectorSearchService vectorSearchService;
@@ -32,9 +32,9 @@ public class AiPromptSearchService {
     private final ObjectMapper objectMapper;
 
     public AiPromptSearchService(BedrockEnrichmentService bedrockEnrichmentService,
-                                 VectorSearchService vectorSearchService,
-                                 ConsolidatedEnrichedSectionRepository consolidatedRepo,
-                                 ObjectMapper objectMapper) {
+            VectorSearchService vectorSearchService,
+            ConsolidatedEnrichedSectionRepository consolidatedRepo,
+            ObjectMapper objectMapper) {
         this.bedrockEnrichmentService = bedrockEnrichmentService;
         this.vectorSearchService = vectorSearchService;
         this.consolidatedRepo = consolidatedRepo;
@@ -46,7 +46,8 @@ public class AiPromptSearchService {
      */
     public List<ChatbotResultDto> aiSearch(ChatbotRequest request) {
         String userMessage = request != null ? request.getMessage() : null;
-        if (!StringUtils.hasText(userMessage)) return List.of();
+        if (!StringUtils.hasText(userMessage))
+            return List.of();
         log.info("AI search input message='{}'", clip(userMessage));
 
         // Build prompt -> AI JSON
@@ -88,25 +89,30 @@ public class AiPromptSearchService {
             if (aiJson.hasNonNull("context") && aiJson.get("context").isObject()) {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> ctx = objectMapper.convertValue(aiJson.get("context"), Map.class);
-                if (ctx != null) context.putAll(ctx);
+                if (ctx != null)
+                    context.putAll(ctx);
             }
         }
         if (request != null) {
-            if (request.getTags() != null) tags.addAll(request.getTags());
-            if (request.getKeywords() != null) keywords.addAll(request.getKeywords());
-            if (request.getContext() != null) context.putAll(request.getContext());
-            if (StringUtils.hasText(request.getOriginal_field_name())) roleHint = request.getOriginal_field_name();
+            if (request.getTags() != null)
+                tags.addAll(request.getTags());
+            if (request.getKeywords() != null)
+                keywords.addAll(request.getKeywords());
+            if (request.getContext() != null)
+                context.putAll(request.getContext());
+            if (StringUtils.hasText(request.getOriginal_field_name()))
+                roleHint = request.getOriginal_field_name();
         }
         tags = tags.stream().filter(StringUtils::hasText).map(String::trim).distinct().collect(Collectors.toList());
-        keywords = keywords.stream().filter(StringUtils::hasText).map(String::trim).distinct().collect(Collectors.toList());
+        keywords = keywords.stream().filter(StringUtils::hasText).map(String::trim).distinct()
+                .collect(Collectors.toList());
         log.info(
                 "AI search derived query='{}', roleHint='{}', tags={}, keywords={}, contextKeys={}",
                 clip(query),
                 roleHint,
                 tags,
                 keywords,
-                contextKeys(context)
-        );
+                contextKeys(context));
 
         // Derive section key (from AI context or user text)
         String sectionKey = null;
@@ -120,7 +126,8 @@ public class AiPromptSearchService {
             sectionKey = extractSectionKey(userMessage);
         }
         // Heuristic role extraction from user message when AI didn't provide one.
-        // Note: we'll only apply role filtering if the user explicitly asked for a role.
+        // Note: we'll only apply role filtering if the user explicitly asked for a
+        // role.
         boolean userExplicitRole = userExplicitlyRequestedRole(userMessage, sectionKey)
                 || (request != null && StringUtils.hasText(request.getOriginal_field_name()));
         log.info("AI search derived sectionKey='{}', userExplicitRole={}", sectionKey, userExplicitRole);
@@ -132,13 +139,13 @@ public class AiPromptSearchService {
         }
 
         int limit = (request != null && request.getLimit() != null && request.getLimit() > 0)
-                ? Math.min(request.getLimit(), 200) : 15;
+                ? Math.min(request.getLimit(), 200)
+                : 15;
 
         try {
             // Vector search constrained by section; no strict role in SQL
-            List<ContentChunkWithDistance> vectorResults =
-                    (sectionKey != null)
-                            ? vectorSearchService.search(
+            List<ContentChunkWithDistance> vectorResults = (sectionKey != null)
+                    ? vectorSearchService.search(
                             query,
                             null,
                             limit,
@@ -147,7 +154,7 @@ public class AiPromptSearchService {
                             context.isEmpty() ? null : context,
                             null,
                             sectionKey)
-                            : vectorSearchService.search(
+                    : vectorSearchService.search(
                             query,
                             null,
                             limit,
@@ -176,18 +183,17 @@ public class AiPromptSearchService {
             }
 
             // Metadata search: prefer section-constrained when available
-            List<ConsolidatedEnrichedSection> metaMatches =
-                    (sectionKey != null)
-                            ? consolidatedRepo.findBySectionKey(sectionKey, Math.max(limit * 2, 50))
-                            : consolidatedRepo.findByMetadataQuery(query, Math.max(limit * 2, 50));
+            List<ConsolidatedEnrichedSection> metaMatches = (sectionKey != null)
+                    ? consolidatedRepo.findBySectionKey(sectionKey, Math.max(limit * 2, 50))
+                    : consolidatedRepo.findByMetadataQuery(query, Math.max(limit * 2, 50));
 
             if (org.springframework.util.StringUtils.hasText(sectionKey)) {
                 // Use consolidated only for section-scoped answers
-                List<ConsolidatedEnrichedSection> rows =
-                        consolidatedRepo.findByContextSectionKey(sectionKey,
-                                org.springframework.util.StringUtils.hasText(roleHint) ? 50 : limit);
+                List<ConsolidatedEnrichedSection> rows = consolidatedRepo.findByContextSectionKey(sectionKey,
+                        org.springframework.util.StringUtils.hasText(roleHint) ? 50 : limit);
 
-                // Apply a role only if the user explicitly requested it; ignore AI-suggested roles otherwise
+                // Apply a role only if the user explicitly requested it; ignore AI-suggested
+                // roles otherwise
                 String bestRole = userExplicitRole ? pickBestRole(roleHint, rows) : null;
                 if (userExplicitRole && org.springframework.util.StringUtils.hasText(bestRole)) {
                     final String rf = bestRole.toLowerCase();
@@ -233,16 +239,16 @@ public class AiPromptSearchService {
             List<ChatbotResultDto> fallback = !vectorDtos.isEmpty()
                     ? vectorDtos
                     : metaMatches.stream()
-                    .map(s -> {
-                        ChatbotResultDto dto = toDto(s, "consolidated_enriched_sections");
-                        if (dto.getContext() == null) {
-                            dto.setContext(s.getContext());
-                        }
-                        return dto;
-                    })
-                    .collect(Collectors.toList());
+                            .map(s -> {
+                                ChatbotResultDto dto = toDto(s, "consolidated_enriched_sections");
+                                if (dto.getContext() == null) {
+                                    dto.setContext(s.getContext());
+                                }
+                                return dto;
+                            })
+                            .collect(Collectors.toList());
             return fallback;
-        } catch(Exception e){
+        } catch (Exception e) {
             return List.of();
         }
     }
@@ -250,7 +256,8 @@ public class AiPromptSearchService {
     // Helpers
 
     /**
-     * Transforms a consolidated section into a DTO tailored for AI search responses.
+     * Transforms a consolidated section into a DTO tailored for AI search
+     * responses.
      */
     private ChatbotResultDto toDto(ConsolidatedEnrichedSection section, String source) {
         ChatbotResultDto dto = new ChatbotResultDto();
@@ -262,6 +269,8 @@ public class AiPromptSearchService {
         dto.setContentRole(section.getOriginalFieldName());
         dto.setLastModified(section.getSavedAt() != null ? section.getSavedAt().toString() : null);
         dto.setMatchTerms(List.of("ai-search"));
+        dto.setTags(section.getTags());
+        dto.setKeywords(section.getKeywords());
         // enrich with page_id, tenant, locale
         dto.setLocale(extractLocale(section));
         dto.setTenant(extractTenant(section));
@@ -288,11 +297,16 @@ public class AiPromptSearchService {
      * Converts a JSON node into a list of strings, accepting scalars or arrays.
      */
     private List<String> readStrings(JsonNode node) {
-        if (node == null || node.isNull()) return List.of();
-        if (node.isTextual()) return List.of(node.asText());
+        if (node == null || node.isNull())
+            return List.of();
+        if (node.isTextual())
+            return List.of(node.asText());
         if (node.isArray()) {
             List<String> out = new ArrayList<>();
-            node.forEach(n -> { if (n.isTextual()) out.add(n.asText()); });
+            node.forEach(n -> {
+                if (n.isTextual())
+                    out.add(n.asText());
+            });
             return out;
         }
         return List.of();
@@ -302,7 +316,8 @@ public class AiPromptSearchService {
      * Removes Markdown-style JSON fences produced by some models.
      */
     private String stripJsonFences(String text) {
-        if (text == null) return null;
+        if (text == null)
+            return null;
         String trimmed = text.trim();
         if (trimmed.startsWith("```") && trimmed.endsWith("```")) {
             trimmed = trimmed.substring(3, trimmed.length() - 3).trim();
@@ -318,9 +333,11 @@ public class AiPromptSearchService {
      * Attempts to find a section key within user free text.
      */
     private String extractSectionKey(String text) {
-        if (!StringUtils.hasText(text)) return null;
+        if (!StringUtils.hasText(text))
+            return null;
         var m = SECTION_KEY_PATTERN.matcher(text);
-        if (m.find()) return normalizeKey(m.group(0));
+        if (m.find())
+            return normalizeKey(m.group(0));
         for (String token : text.split("\\s+")) {
             long hyphens = token.chars().filter(ch -> ch == '-').count();
             if (hyphens >= 2 && token.toLowerCase().endsWith("-section")) {
@@ -334,7 +351,8 @@ public class AiPromptSearchService {
      * Normalizes section keys to lowercase tokens.
      */
     private String normalizeKey(String key) {
-        if (!StringUtils.hasText(key)) return null;
+        if (!StringUtils.hasText(key))
+            return null;
         return key.trim().toLowerCase();
     }
 
@@ -360,7 +378,8 @@ public class AiPromptSearchService {
      * Infers a likely role (e.g., headline) from the phrasing.
      */
     private String inferRoleHint(String text, String sectionKey) {
-        if (!StringUtils.hasText(text)) return null;
+        if (!StringUtils.hasText(text))
+            return null;
         String t = text.toLowerCase(Locale.ROOT).trim();
 
         // Try to capture phrase before "for/of <sectionKey>" or just before "for/of"
@@ -368,29 +387,35 @@ public class AiPromptSearchService {
         if (StringUtils.hasText(sectionKey)) {
             String sk = Pattern.quote(sectionKey.toLowerCase(Locale.ROOT));
             var mFor = Pattern.compile("(?i)\\bgive\\s+me\\s+(.+?)\\s+(?:for|of)\\s+.*" + sk + "\\b").matcher(t);
-            if (mFor.find()) roleCandidate = mFor.group(1);
+            if (mFor.find())
+                roleCandidate = mFor.group(1);
             if (roleCandidate == null) {
                 var mGeneric = Pattern.compile("(?i)\\b(.+?)\\s+(?:for|of)\\s+.*" + sk + "\\b").matcher(t);
-                if (mGeneric.find()) roleCandidate = mGeneric.group(1);
+                if (mGeneric.find())
+                    roleCandidate = mGeneric.group(1);
             }
         }
         if (roleCandidate == null) {
             var mFor = Pattern.compile("(?i)\\bgive\\s+me\\s+(.+?)\\s+(?:for|of)\\s+").matcher(t);
-            if (mFor.find()) roleCandidate = mFor.group(1);
+            if (mFor.find())
+                roleCandidate = mFor.group(1);
             if (roleCandidate == null) {
                 var mGeneric = Pattern.compile("(?i)\\b([a-z0-9_-]{3,})\\b\\s+(?:for|of)\\b").matcher(t);
-                if (mGeneric.find()) roleCandidate = mGeneric.group(1);
+                if (mGeneric.find())
+                    roleCandidate = mGeneric.group(1);
             }
         }
 
-        if (!StringUtils.hasText(roleCandidate)) return null;
+        if (!StringUtils.hasText(roleCandidate))
+            return null;
 
         // Tokenize and pick a specific token without any hardcoded stopword list
         List<String> tokens = Arrays.stream(roleCandidate.split("\\s+"))
                 .map(s -> s.replaceAll("[^a-z0-9_-]", ""))
                 .filter(StringUtils::hasText)
                 .toList();
-        if (tokens.isEmpty()) return null;
+        if (tokens.isEmpty())
+            return null;
 
         // Choose the last significant token, which often corresponds to the field name
         String chosen = tokens.get(tokens.size() - 1);
@@ -401,7 +426,8 @@ public class AiPromptSearchService {
      * Checks whether the user explicitly asked for a role-specific answer.
      */
     private boolean userExplicitlyRequestedRole(String text, String sectionKey) {
-        if (!StringUtils.hasText(text)) return false;
+        if (!StringUtils.hasText(text))
+            return false;
         String t = text.toLowerCase(Locale.ROOT);
         if (StringUtils.hasText(sectionKey)) {
             String sk = Pattern.quote(sectionKey.toLowerCase(Locale.ROOT));
@@ -424,17 +450,21 @@ public class AiPromptSearchService {
                 .map(s -> s.toLowerCase(Locale.ROOT))
                 .distinct()
                 .toList();
-        if (available.isEmpty()) return null;
+        if (available.isEmpty())
+            return null;
         String cand = roleCandidate != null ? roleCandidate.toLowerCase(Locale.ROOT) : null;
 
-        if (cand == null || cand.isBlank()) return null;
+        if (cand == null || cand.isBlank())
+            return null;
         // 1) Exact match
-        if (cand != null && available.contains(cand)) return cand;
+        if (cand != null && available.contains(cand))
+            return cand;
 
         // 2) Contains either way with boundaries relaxed
         if (cand != null) {
             for (String a : available) {
-                if (a.contains(cand) || cand.contains(a)) return a;
+                if (a.contains(cand) || cand.contains(a))
+                    return a;
             }
         }
         // 4) Fallback: no confident role
@@ -447,13 +477,15 @@ public class AiPromptSearchService {
     private String extractLocale(ConsolidatedEnrichedSection s) {
         if (s.getContext() != null) {
             Object env = s.getContext().get("envelope");
-            if (env instanceof Map<?,?> m) {
+            if (env instanceof Map<?, ?> m) {
                 Object loc = m.get("locale");
-                if (loc instanceof String str && StringUtils.hasText(str)) return str;
+                if (loc instanceof String str && StringUtils.hasText(str))
+                    return str;
             }
         }
         String fromPath = extractLocaleFromPath(s.getSectionUri());
-        if (fromPath == null) fromPath = extractLocaleFromPath(s.getSectionPath());
+        if (fromPath == null)
+            fromPath = extractLocaleFromPath(s.getSectionPath());
         return fromPath;
     }
 
@@ -463,13 +495,15 @@ public class AiPromptSearchService {
     private String extractTenant(ConsolidatedEnrichedSection s) {
         if (s.getContext() != null) {
             Object env = s.getContext().get("envelope");
-            if (env instanceof Map<?,?> m) {
+            if (env instanceof Map<?, ?> m) {
                 Object ten = m.get("tenant");
-                if (ten instanceof String str && StringUtils.hasText(str)) return str;
+                if (ten instanceof String str && StringUtils.hasText(str))
+                    return str;
             }
         }
         String fromUri = extractTenantFromPath(s.getSectionUri());
-        if (fromUri != null) return fromUri;
+        if (fromUri != null)
+            return fromUri;
         String fromPath = extractTenantFromPath(s.getSectionPath());
         return fromPath != null ? fromPath : "applecom-cms";
     }
@@ -479,7 +513,8 @@ public class AiPromptSearchService {
      */
     private String extractPageId(ConsolidatedEnrichedSection s) {
         String pid = extractPageIdFromPath(s.getSectionUri());
-        if (pid == null) pid = extractPageIdFromPath(s.getSectionPath());
+        if (pid == null)
+            pid = extractPageIdFromPath(s.getSectionPath());
         return pid;
     }
 
@@ -487,9 +522,11 @@ public class AiPromptSearchService {
      * Reads locale tokens embedded in CMS paths.
      */
     private String extractLocaleFromPath(String path) {
-        if (!StringUtils.hasText(path)) return null;
+        if (!StringUtils.hasText(path))
+            return null;
         var m = Pattern.compile("/([a-z]{2}_[A-Z]{2})/").matcher(path);
-        if (m.find()) return m.group(1);
+        if (m.find())
+            return m.group(1);
         return null;
     }
 
@@ -497,9 +534,11 @@ public class AiPromptSearchService {
      * Pulls tenant information from DAM paths.
      */
     private String extractTenantFromPath(String path) {
-        if (!StringUtils.hasText(path)) return null;
+        if (!StringUtils.hasText(path))
+            return null;
         var m = Pattern.compile("/content/dam/([^/]+)/").matcher(path);
-        if (m.find()) return m.group(1);
+        if (m.find())
+            return m.group(1);
         return null;
     }
 
@@ -507,9 +546,11 @@ public class AiPromptSearchService {
      * Determines the page segment from locale-qualified paths.
      */
     private String extractPageIdFromPath(String path) {
-        if (!StringUtils.hasText(path)) return null;
+        if (!StringUtils.hasText(path))
+            return null;
         var m = Pattern.compile("/[a-z]{2}_[A-Z]{2}/([^/]+)/").matcher(path);
-        if (m.find()) return m.group(1);
+        if (m.find())
+            return m.group(1);
         return null;
     }
 }

@@ -54,7 +54,9 @@ public class ChatbotResultDto {
     /**
      * Legacy constructor retained for compatibility with older mappers.
      */
-    public <T> ChatbotResultDto(String originalFieldName, String s, String sectionPath, String sectionUri, String chunkText, String source, String originalFieldName1, int rank, double distance, String string, String lastModified, List<T> ts) {
+    public <T> ChatbotResultDto(String originalFieldName, String s, String sectionPath, String sectionUri,
+            String chunkText, String source, String originalFieldName1, int rank, double distance, String string,
+            String lastModified, List<T> ts) {
     }
 
     // Also expose a "text" alias for clients that expect it
@@ -62,7 +64,9 @@ public class ChatbotResultDto {
      * Returns the cleansed text under a legacy "text" alias.
      */
     @JsonProperty("text")
-    public String getText() { return cleansedText; }
+    public String getText() {
+        return cleansedText;
+    }
 
     @JsonIgnore
     private String source; // "consolidated_enriched_sections" or "content_chunks"
@@ -77,6 +81,14 @@ public class ChatbotResultDto {
 
     @JsonProperty("match_terms")
     private java.util.List<String> matchTerms;
+
+    @JsonProperty("tags")
+    @Schema(description = "Tags associated with the document")
+    private java.util.List<String> tags;
+
+    @JsonProperty("keywords")
+    @Schema(description = "Keywords associated with the document")
+    private java.util.List<String> keywords;
 
     @JsonProperty("context")
     private Map<String, Object> context;

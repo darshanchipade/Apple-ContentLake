@@ -330,6 +330,8 @@ public class ChatbotService {
         dto.setSectionUri(section.getSectionUri());
         dto.setCleansedText(section.getCleansedText());
         dto.setContext(section.getContext());
+        dto.setTags(section.getTags());
+        dto.setKeywords(section.getKeywords());
         dto.setContentRole(
                 firstNonBlank(section.getOriginalFieldName(), asStringFromContext(section, "envelope", "sectionName")));
         dto.setSource(source);

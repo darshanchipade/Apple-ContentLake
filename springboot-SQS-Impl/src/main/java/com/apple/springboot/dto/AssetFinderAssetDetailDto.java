@@ -17,6 +17,7 @@ public class AssetFinderAssetDetailDto {
     private String environment;
     private String project;
     private String site;
+    private String pageContext;
     private String geo;
     private String locale;
     private String assetKey;

@@ -31,6 +31,7 @@ const workspaceLinks = [
   { label: "Upload Activity", href: "/ingestion/activity", icon: CloudArrowUpIcon },
   { label: "Pipeline Health", href: "/extraction", icon: ArrowTrendingUpIcon },
   { label: "Search Finder", href: "/search", icon: MagnifyingGlassIcon },
+  { label: "Semantic Search", href: "/semantic-search", icon: MagnifyingGlassIcon },
   { label: "Asset Finder", href: "/asset-finder", icon: PhotoIcon },
 ];
 
@@ -50,13 +51,14 @@ export function PipelineShell({ currentStep, showTracker = true, children }: Pip
   // Auto-hide tracker on specific pages
   const effectiveShowTracker = useMemo(() => {
     if (!showTracker) return false;
-    const excludedRoutes = ['/search', '/chatbot', '/ingestion/activity', '/asset-finder'];
+    const excludedRoutes = ['/search', '/semantic-search', '/chatbot', '/ingestion/activity', '/asset-finder'];
     return !excludedRoutes.includes(pathname);
   }, [showTracker, pathname]);
 
   const pageLabel = useMemo(() => {
     if (pathname === '/ingestion/activity') return 'Upload Activity';
     if (pathname === '/search') return 'Search Finder';
+    if (pathname === '/semantic-search') return 'Semantic Search';
     if (pathname === '/asset-finder') return 'Asset Finder';
 
     const stepLabels: Record<StepId, string> = {

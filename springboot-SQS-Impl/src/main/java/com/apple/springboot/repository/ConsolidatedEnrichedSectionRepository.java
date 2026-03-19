@@ -123,4 +123,33 @@ public interface ConsolidatedEnrichedSectionRepository extends JpaRepository<Con
                )
              """, nativeQuery = true)
  long countSectionsMissingEmbeddings(@Param("cleansedDataId") UUID cleansedDataId);
+
+  /**
+   * Loads all consolidated sections matching the given list of section URIs.
+   */
+  List<ConsolidatedEnrichedSection> findAllBySectionUriIn(List<String> sectionUris);
+
+   /**
+    * Loads all consolidated sections matching the given list of section paths.
+    */
+   List<ConsolidatedEnrichedSection> findAllBySectionPathIn(List<String> sectionPaths);
+
+   /**
+    * Loads all consolidated sections for the given source URIs (page URLs).
+    * Used for context window expansion — fetches all sections on the same page(s).
+    */
+   List<ConsolidatedEnrichedSection> findAllBySourceUriIn(List<String> sourceUris);
+
+   /**
+    * Loads consolidated sections where section_path equals the given path OR starts with
+    * path + "/" or path + "-" (AEM descendant pattern, e.g. banner-card-section-items/apple-pencil).
+    * Used to include child card content (header, bodyCopy) when the hit is the parent section.
+    */
+   @Query(value = """
+       SELECT * FROM consolidated_enriched_sections
+       WHERE section_path = :path
+          OR section_path LIKE CONCAT(:path, '/%')
+          OR section_path LIKE CONCAT(:path, '-%')
+       """, nativeQuery = true)
+   List<ConsolidatedEnrichedSection> findAllBySectionPathOrDescendants(@Param("path") String path);
 }

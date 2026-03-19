@@ -42,7 +42,11 @@ public class DataIngestionService {
     private ContentHashingService contentHashingService;
 
     // Treat these as extractable content fields
-    private static final Set<String> CONTENT_FIELD_KEYS = Set.of("copy", "disclaimers", "text", "url");
+    private static final Set<String> CONTENT_FIELD_KEYS = Set.of(
+            "copy", "disclaimers", "text", "url", "headline", "subheadline",
+            "topic", "title", "eyebrow", "caption", "label", "cta",
+            "description", "summary", "heading"
+    );
     private static final Set<String> ICON_NODE_KEYS = Set.of("icon");
     private static final Set<String> ICON_META_KEYS = Set.of("_path", "_uri_path");
     private static final Set<String> IMAGE_META_KEYS = Set.of(
@@ -55,6 +59,13 @@ public class DataIngestionService {
             "tax", "Tax day",
             "christmas", "Christmas",
             "mothers", "Mothers day");
+
+    /** Analytics attribute names for region slug extraction (priority order, aligned with HtmlTransformationAdapter). */
+    private static final List<String> ANALYTICS_REGION_ATTRS = List.of(
+            "data-analytics-activitymap-region-id",
+            "data-analytics-gallery-id",
+            "data-analytics-section-engagement",
+            "data-analytics-region");
 
     private final CleansedDataStoreRepository cleansedDataStoreRepository;
     private final ObjectMapper objectMapper;
@@ -1204,6 +1215,11 @@ public class DataIngestionService {
                         currentFacets.put("sectionKey", pathParts[pathParts.length - 1]);
                     }
                 }
+                // Extract analyticsRegionSlug from analyticsAttributes (aligned with HTML region slug logic)
+                String analyticsSlug = extractAnalyticsRegionSlug(currentNode);
+                if (analyticsSlug != null && !analyticsSlug.isBlank()) {
+                    currentFacets.put("analyticsRegionSlug", analyticsSlug);
+                }
             }
 
             currentNode.fields().forEachRemaining(entry -> {
@@ -1243,7 +1259,8 @@ public class DataIngestionService {
                     } else if (fieldValue.isObject() && fieldValue.has("url") && fieldValue.get("url").isTextual()) {
                         Envelope contentEnv = buildCurrentEnvelope(fieldValue, currentEnvelope);
                         contentEnv.setUsagePath(usagePath);
-                        processContentField(fieldValue.get("url").asText(), fieldKey, contentEnv, currentFacets,
+                        // Store the URL with the literal "url" role so that search can pair it with the CTA
+                        processContentField(fieldValue.get("url").asText(), "url", contentEnv, currentFacets,
                                 results, counters, false);
                     }
                     // else if (fieldValue.isObject() && fieldValue.has("copy") &&
@@ -1297,6 +1314,10 @@ public class DataIngestionService {
                                     currentEnvelope.setUsagePath(usagePath);
                                     processContentField(element.get("copy").asText(), fieldKey + "[" + idx + "]",
                                             currentEnvelope, currentFacets, results, counters, false);
+                                } else if (element.isObject() || element.isArray()) {
+                                    currentEnvelope.setUsagePath(usagePath);
+                                    findAndExtractRecursive(element, fieldKey + "[" + idx + "]", currentEnvelope,
+                                            currentFacets, results, counters);
                                 }
                                 idx++;
                             }
@@ -1320,9 +1341,22 @@ public class DataIngestionService {
                 Facets newFacets = new Facets();
                 newFacets.putAll(parentFacets);
                 newFacets.put("sectionIndex", String.valueOf(i));
-                // When recursing into an array, the parent field name is the one that pointed
-                // to the array
-                findAndExtractRecursive(arrayElement, parentFieldName, parentEnvelope, newFacets, results, counters);
+                // When the array contains section-like elements (e.g. content.sections[] for AEM
+                // JSON, or content[] for HTML-derived JSON), use the section element's envelope
+                // as the parent. This ensures sectionPath is stored at section-level (e.g.
+                // banner-card-section) rather than at the content parent (webpage-content),
+                // so search only fetches that section's fragments, not the whole page.
+                Envelope effectiveParent = parentEnvelope;
+                if (arrayElement != null && arrayElement.isObject()) {
+                    String model = arrayElement.has("_model") && arrayElement.get("_model").isTextual()
+                            ? arrayElement.get("_model").asText() : null;
+                    boolean isSection = model != null
+                            && (model.endsWith("-section") || "html-content-section".equals(model));
+                    if (isSection && arrayElement.has("_path") && arrayElement.get("_path").isTextual()) {
+                        effectiveParent = buildCurrentEnvelope(arrayElement, parentEnvelope);
+                    }
+                }
+                findAndExtractRecursive(arrayElement, parentFieldName, effectiveParent, newFacets, results, counters);
             }
         }
     }
@@ -1358,13 +1392,34 @@ public class DataIngestionService {
                 currentEnvelope.setProvenance(provenanceMap);
             } catch (IllegalArgumentException e) {
                 logger.warn("Could not parse _provenance field as a Map for path: {}", path, e);
-                currentEnvelope.setProvenance(parentEnvelope.getProvenance());
+                currentEnvelope.setProvenance(parentEnvelope != null ? parentEnvelope.getProvenance() : null);
             }
         } else {
-            currentEnvelope.setProvenance(parentEnvelope.getProvenance());
+            currentEnvelope.setProvenance(parentEnvelope != null ? parentEnvelope.getProvenance() : null);
         }
 
-        if (path != null) {
+        // Inheritance Block: Safely pull Locale contexts linearly from Parent Envelopes
+        if (parentEnvelope != null) {
+            currentEnvelope.setLocale(parentEnvelope.getLocale());
+            currentEnvelope.setLanguage(parentEnvelope.getLanguage());
+            currentEnvelope.setCountry(parentEnvelope.getCountry());
+        }
+
+        // Direct Node Override: Safely pull explicit `locale` JSON overrides from nodes
+        if (currentNode != null && currentNode.has("locale")) {
+            String localeStr = currentNode.get("locale").asText();
+            if (localeStr != null && !localeStr.isBlank()) {
+                currentEnvelope.setLocale(localeStr);
+                String[] parts = localeStr.split("[_\\-]");
+                if (parts.length >= 2) {
+                    currentEnvelope.setLanguage(parts[0]);
+                    currentEnvelope.setCountry(parts[1]);
+                }
+            }
+        }
+
+        // URL Semantic Fallback: Pass string math against URL path slugs
+        if (path != null && currentEnvelope.getLocale() == null) {
             Matcher matcher = LOCALE_PATTERN.matcher(path);
             // cover /en_US/, /en_US, /en-US/, and /en-US.
             if (matcher.find()) {
@@ -1406,6 +1461,104 @@ public class DataIngestionService {
             }
         });
         return currentFacets;
+    }
+
+    /**
+     * Extracts a canonical analytics region slug from a section node's analyticsAttributes (or similar).
+     * Uses the same priority as HtmlTransformationAdapter: activitymap-region-id → gallery-id →
+     * section-engagement (strip "name:" prefix) → region. Slugifies for consistency with HTML path.
+     */
+    private String extractAnalyticsRegionSlug(JsonNode sectionNode) {
+        if (sectionNode == null || !sectionNode.isObject())
+            return null;
+        String raw = scanAnalyticsForRegionValue(sectionNode);
+        // HTML-derived JSON often stores region in _path (html-content-section[N]/<slug>/fieldKey)
+        // rather than analyticsAttributes. Use path fallback to keep facets consistent across sources.
+        if (raw == null || raw.isBlank()) {
+            raw = extractRegionFromHtmlPath(sectionNode);
+        }
+        if (raw == null || raw.isBlank()) return null;
+        return raw.toLowerCase(java.util.Locale.ROOT)
+                .replaceAll("[^a-z0-9]+", "-")
+                .replaceAll("^-+|-+$", "");
+    }
+
+    /**
+     * Extracts region slug from HTML-derived paths:
+     *   .../html-content-section[12]/why-apple/headline
+     * When no region is present, shape is usually:
+     *   .../html-content-section[12]/headline
+     */
+    private String extractRegionFromHtmlPath(JsonNode node) {
+        String fromPath = extractRegionFromSinglePath(node.path("_path").asText(null));
+        if (fromPath != null && !fromPath.isBlank()) return fromPath;
+
+        String usagePath = node.path("_usagePath").asText(null);
+        if (usagePath == null || usagePath.isBlank()) return null;
+        // usagePath may contain "container ::ref:: fragment"; inspect each side.
+        for (String part : usagePath.split("\\Q" + USAGE_REF_DELIM + "\\E")) {
+            String fromUsagePart = extractRegionFromSinglePath(part);
+            if (fromUsagePart != null && !fromUsagePart.isBlank()) return fromUsagePart;
+        }
+        return null;
+    }
+
+    private String extractRegionFromSinglePath(String path) {
+        if (path == null || path.isBlank()) return null;
+        String[] segments = path.split("/");
+        for (int i = 0; i < segments.length; i++) {
+            String seg = segments[i];
+            if (seg != null && seg.startsWith("html-content-section[")) {
+                // Need at least two remaining segments to safely infer a region:
+                // [region, fieldKey]. If only one remains, it's likely just fieldKey.
+                if (i + 2 < segments.length) {
+                    String candidate = segments[i + 1];
+                    if (candidate != null && !candidate.isBlank()) return candidate;
+                }
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Scans analytics containers (analyticsAttributes, analytics, metadata) and returns
+     * the first region value in priority order (activitymap → gallery → section-engagement → region).
+     */
+    private String scanAnalyticsForRegionValue(JsonNode node) {
+        Map<String, String> found = new java.util.LinkedHashMap<>();
+        for (String containerKey : List.of("analyticsAttributes", "analytics", "metadata")) {
+            JsonNode arr = node.get(containerKey);
+            if (arr == null || !arr.isArray())
+                continue;
+            for (JsonNode el : arr) {
+                if (!el.isObject())
+                    continue;
+                String name = el.path("name").asText(null);
+                if (name == null || name.isBlank())
+                    name = el.path("key").asText(null);
+                if (name == null || name.isBlank())
+                    continue;
+                for (String attr : ANALYTICS_REGION_ATTRS) {
+                    if (!attr.equalsIgnoreCase(name))
+                        continue;
+                    String val = el.path("value").asText(null);
+                    if (val == null || val.isBlank())
+                        continue;
+                    if ("data-analytics-section-engagement".equalsIgnoreCase(name)
+                            && val.toLowerCase(java.util.Locale.ROOT).startsWith("name:"))
+                        val = val.substring(5).trim();
+                    found.putIfAbsent(attr, val);
+                    break;
+                }
+            }
+        }
+        for (String attr : ANALYTICS_REGION_ATTRS) {
+            String val = found.get(attr);
+            if (val != null && !val.isBlank())
+                return val;
+        }
+        return null;
     }
 
     /**
@@ -1621,7 +1774,10 @@ public class DataIngestionService {
         if (key == null)
             return false;
         String lower = key.toLowerCase();
-        return lower.contains("image") || lower.contains("backgroundimage");
+        return lower.contains("image") || lower.contains("backgroundimage") || lower.contains("icon")
+                || lower.contains("graphic") || lower.contains("media") || lower.contains("poster")
+                || lower.contains("banner") || lower.contains("logo") || lower.contains("thumbnail")
+                || lower.contains("asset") || lower.contains("symbol");
     }
 
     /**

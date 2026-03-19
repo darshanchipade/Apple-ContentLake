@@ -15,10 +15,12 @@ import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.core.SdkBytes;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeClient;
-import software.amazon.awssdk.services.bedrockruntime.model.BedrockRuntimeException;
 import software.amazon.awssdk.services.bedrockruntime.model.InvokeModelRequest;
 import software.amazon.awssdk.services.bedrockruntime.model.InvokeModelResponse;
+import software.amazon.awssdk.services.bedrockruntime.model.BedrockRuntimeException;
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
 
+import java.time.Duration;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -40,15 +42,16 @@ public class BedrockEnrichmentService {
 
     @Value("${app.enrichment.computeItemVector:false}")
     private boolean computeItemVector;
+
     /**
      * Initializes the Bedrock client and model configuration.
      */
     @Autowired
     public BedrockEnrichmentService(ObjectMapper objectMapper,
-                                    @Value("${aws.region:us-east-1}") String region,
-                                    @Value("${aws.bedrock.modelId}") String modelId,
-                                    @Value("${aws.bedrock.embeddingModelId}") String embeddingModelId,
-                                    @Value("${app.bedrock.maxTokens:512}") int bedrockMaxTokens) {
+            @Value("${aws.region:us-east-1}") String region,
+            @Value("${aws.bedrock.modelId}") String modelId,
+            @Value("${aws.bedrock.embeddingModelId}") String embeddingModelId,
+            @Value("${app.bedrock.maxTokens:512}") int bedrockMaxTokens) {
         this.objectMapper = objectMapper;
         this.bedrockRegion = region;
         this.bedrockModelId = modelId;
@@ -63,8 +66,13 @@ public class BedrockEnrichmentService {
         this.bedrockClient = BedrockRuntimeClient.builder()
                 .region(Region.of(this.bedrockRegion))
                 .credentialsProvider(DefaultCredentialsProvider.create())
+                .overrideConfiguration(ClientOverrideConfiguration.builder()
+                        .apiCallTimeout(Duration.ofMinutes(10))
+                        .apiCallAttemptTimeout(Duration.ofMinutes(10))
+                        .build())
                 .build();
-        logger.info("BedrockEnrichmentService initialized with region: {} and model ID: {}", this.bedrockRegion, this.bedrockModelId);
+        logger.info("BedrockEnrichmentService initialized with region: {} and model ID: {}", this.bedrockRegion,
+                this.bedrockModelId);
     }
 
     /**
@@ -112,46 +120,51 @@ public class BedrockEnrichmentService {
     /**
      * Builds the prompt template for Bedrock enrichment calls.
      */
-    private String createEnrichmentPrompt(JsonNode itemContent, EnrichmentContext context) throws JsonProcessingException {
+    private String createEnrichmentPrompt(JsonNode itemContent, EnrichmentContext context)
+            throws JsonProcessingException {
         String cleansedContent = itemContent.path("cleansedContent").asText("");
         String contextJson = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(context);
 
-        String promptTemplate =
-                "You are an expert content analyst. Analyze the text and return enrichments as a single JSON object ONLY (no markdown, no code fences, no commentary).\n" +
-                        "\n" +
-                        "Input content:\n<content>\n%s\n</content>\n" +
-                        "\n" +
-                        "Context (JSON):\n<context>\n%s\n</context>\n" +
-                        "\n" +
-                        "Rules:\n" +
-                        "- Output MUST be exactly one JSON object with one top-level key: \"standardEnrichments\".\n" +
-                        "- Do not include any text before/after the JSON. No backticks. No explanations.\n" +
-                        "- Use context (e.g., pathHierarchy, locale, facets, model) to tailor results.\n" +
-                        "- Keep summary ≤ 2 sentences; do not copy the content verbatim.\n" +
-                        "- keywords/tags: lowercase, unique, ≤ 10 keywords, ≤ 5 tags; no stopwords.\n" +
-                        "- sentiment ∈ {\"positive\",\"neutral\",\"negative\"}.\n" +
-                        "- classification: short category like \"product description\", \"legal disclaimer\", \"promotional heading\", etc.\n" +
-                        "- If uncertain, return best-effort values; never null; use [] for empty arrays and \"unknown\" when needed.\n" +
-                        "\n" +
-                        "Output JSON schema (example shape; values must reflect the input):\n" +
-                        "{\n" +
-                        "  \"standardEnrichments\": {\n" +
-                        "    \"summary\": \"\",\n" +
-                        "    \"keywords\": [\"\"],\n" +
-                        "    \"sentiment\": \"\",\n" +
-                        "    \"classification\": \"\",\n" +
-                        "    \"tags\": [\"\"]\n" +
-                        "  }\n" +
-                        "}";
+        String promptTemplate = "You are an expert content analyst. Analyze the text and return enrichments as a single JSON object ONLY (no markdown, no code fences, no commentary).\n"
+                +
+                "\n" +
+                "Input content:\n<content>\n%s\n</content>\n" +
+                "\n" +
+                "Context (JSON):\n<context>\n%s\n</context>\n" +
+                "\n" +
+                "Rules:\n" +
+                "- Output MUST be exactly one JSON object with one top-level key: \"standardEnrichments\".\n" +
+                "- Do not include any text before/after the JSON. No backticks. No explanations.\n" +
+                "- Use context (e.g., pathHierarchy, locale, facets, model) to tailor results.\n" +
+                "- Keep summary ≤ 2 sentences; do not copy the content verbatim.\n" +
+                "- keywords/tags: lowercase, unique, ≤ 10 keywords, ≤ 5 tags; no stopwords.\n" +
+                "- sentiment ∈ {\"positive\",\"neutral\",\"negative\"}.\n" +
+                "- classification: short category like \"product description\", \"legal disclaimer\", \"promotional heading\", etc.\n"
+                +
+                "- If uncertain, return best-effort values; never null; use [] for empty arrays and \"unknown\" when needed.\n"
+                +
+                "\n" +
+                "Output JSON schema (example shape; values must reflect the input):\n" +
+                "{\n" +
+                "  \"standardEnrichments\": {\n" +
+                "    \"summary\": \"\",\n" +
+                "    \"keywords\": [\"\"],\n" +
+                "    \"sentiment\": \"\",\n" +
+                "    \"classification\": \"\",\n" +
+                "    \"tags\": [\"\"]\n" +
+                "  }\n" +
+                "}";
         return String.format(promptTemplate, cleansedContent, contextJson);
     }
 
     /**
-     * Invokes Bedrock to enrich a single content item with summary, tags, and metadata.
+     * Invokes Bedrock to enrich a single content item with summary, tags, and
+     * metadata.
      */
     public Map<String, Object> enrichItem(JsonNode itemContent, EnrichmentContext context) {
         String effectiveModelId = this.bedrockModelId;
-        String sourcePath = (context != null && context.getEnvelope() != null) ? context.getEnvelope().getSourcePath() : "Unknown";
+        String sourcePath = (context != null && context.getEnvelope() != null) ? context.getEnvelope().getSourcePath()
+                : "Unknown";
         logger.info("Starting enrichment for item using model: {}. Item path: {}", effectiveModelId, sourcePath);
 
         Map<String, Object> results = new HashMap<>();
@@ -196,18 +209,44 @@ public class BedrockEnrichmentService {
                 }
 
                 if (textContent.startsWith("{") && textContent.endsWith("}")) {
+                    Map<String, Object> aiResults = null;
+
+                    // 1st attempt: strict JSON
                     try {
-                        Map<String, Object> aiResults = objectMapper.readValue(textContent, new TypeReference<>() {});
+                        aiResults = objectMapper.readValue(textContent, new TypeReference<>() {});
+                    } catch (JsonProcessingException e1) {
+                        // 2nd attempt: relaxed Jackson (tolerates trailing commas, single quotes, unquoted keys)
+                        com.fasterxml.jackson.databind.ObjectMapper relaxed = new com.fasterxml.jackson.databind.ObjectMapper();
+                        relaxed.configure(com.fasterxml.jackson.core.JsonParser.Feature.ALLOW_TRAILING_COMMA, true);
+                        relaxed.configure(com.fasterxml.jackson.core.JsonParser.Feature.ALLOW_SINGLE_QUOTES, true);
+                        relaxed.configure(com.fasterxml.jackson.core.JsonParser.Feature.ALLOW_UNQUOTED_FIELD_NAMES, true);
+                        relaxed.configure(com.fasterxml.jackson.core.JsonParser.Feature.IGNORE_UNDEFINED, true);
+                        // 2a: as-is with relaxed parser
+                        String[] healingAttempts = { textContent, textContent + "}", textContent + "}}" };
+                        for (String attempt : healingAttempts) {
+                            try {
+                                aiResults = relaxed.readValue(attempt, new TypeReference<>() {});
+                                logger.warn("Enrichment JSON recovered via relaxed/healed parsing for: {}", textContent.substring(0, Math.min(80, textContent.length())));
+                                break;
+                            } catch (JsonProcessingException ignored) {
+                                // try next
+                            }
+                        }
+                        if (aiResults == null) {
+                            logger.error("Failed to parse JSON content from Bedrock response: {}. Error: {}", textContent, e1.getMessage());
+                            results.put("error", "Failed to parse JSON from Bedrock response");
+                            results.put("raw_bedrock_response", textContent);
+                            return results;
+                        }
+                    }
+
+                    if (aiResults != null) {
                         aiResults.put("enrichedWithModel", effectiveModelId);
                         return aiResults;
-                    } catch (JsonProcessingException e) {
-                        logger.error("Failed to parse JSON content from Bedrock response: {}. Error: {}", textContent, e.getMessage());
-                        results.put("error", "Failed to parse JSON from Bedrock response");
-                        results.put("raw_bedrock_response", textContent);
-                        return results;
                     }
                 } else {
-                    logger.error("Bedrock response content is not a JSON object after stripping fences: {}", textContent);
+                    logger.error("Bedrock response content is not a JSON object after stripping fences: {}",
+                            textContent);
                     results.put("error", "Bedrock response content is not a JSON object");
                     results.put("raw_bedrock_response", textContent);
                 }
@@ -220,21 +259,23 @@ public class BedrockEnrichmentService {
             // Crucial: let the caller (SQS listener) decide retry/delete; do not swallow
             throw te;
         } catch (BedrockRuntimeException e) {
-            logger.error("Bedrock API error during enrichment for model {}: {}", effectiveModelId, e.awsErrorDetails().errorMessage(), e);
+            logger.error("Bedrock API error during enrichment for model {}: {}", effectiveModelId,
+                    e.awsErrorDetails().errorMessage(), e);
             results.put("error", "Bedrock API error: " + e.awsErrorDetails().errorMessage());
             results.put("aws_error_code", e.awsErrorDetails().errorCode());
             return results;
         } catch (Exception e) {
-            logger.error("Unexpected error during Bedrock enrichment for model {}: {}", effectiveModelId, e.getMessage(), e);
+            logger.error("Unexpected error during Bedrock enrichment for model {}: {}", effectiveModelId,
+                    e.getMessage(), e);
             results.put("error", "Unexpected error during enrichment: " + e.getMessage());
             return results;
         }
         return results;
     }
 
-
     /**
-     * Generic chat invoke for free-form prompts. Returns the first text block from the response.
+     * Generic chat invoke for free-form prompts. Returns the first text block from
+     * the response.
      * Allows an optional max token override to fit prompt sizes.
      */
     public String invokeChatForText(String content, Integer overrideMaxTokens) {
@@ -287,7 +328,8 @@ public class BedrockEnrichmentService {
         } catch (ThrottledException te) {
             throw te; // do not swallow throttling
         } catch (BedrockRuntimeException e) {
-            logger.error("Bedrock API error during chat invoke for model {}: {}", this.bedrockModelId, e.awsErrorDetails().errorMessage(), e);
+            logger.error("Bedrock API error during chat invoke for model {}: {}", this.bedrockModelId,
+                    e.awsErrorDetails().errorMessage(), e);
             throw new RuntimeException("Bedrock API error during chat invoke", e);
         } catch (Exception e) {
             throw new RuntimeException("Unexpected error during chat invoke: " + e.getMessage(), e);
@@ -324,7 +366,8 @@ public class BedrockEnrichmentService {
                 long jitter = ThreadLocalRandom.current().nextLong(50, 200);
                 long sleepMs = (long) Math.min(10_000, baseBackoffMs * Math.pow(2, attempt - 1) + jitter);
                 logger.warn("Bedrock throttled (attempt {}/{}). Backing off for {} ms. Error: {}",
-                        attempt, maxAttempts, sleepMs, e.awsErrorDetails() != null ? e.awsErrorDetails().errorMessage() : e.getMessage());
+                        attempt, maxAttempts, sleepMs,
+                        e.awsErrorDetails() != null ? e.awsErrorDetails().errorMessage() : e.getMessage());
                 try {
                     Thread.sleep(sleepMs);
                 } catch (InterruptedException ie) {

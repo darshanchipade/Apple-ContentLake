@@ -13,6 +13,7 @@ public class AssetFinderFilterRequest {
     private String environment;
     private String project;
     private String site;
+    private String pageContext;
     private String geo;
     private String locale;
     private Integer page = 0;

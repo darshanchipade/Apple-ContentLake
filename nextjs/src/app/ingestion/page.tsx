@@ -14,6 +14,7 @@ import {
   MagnifyingGlassIcon,
   ServerStackIcon,
   TrashIcon,
+  GlobeAltIcon,
 } from "@heroicons/react/24/outline";
 import clsx from "clsx";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -54,7 +55,7 @@ const generateId = () => {
 };
 
 
-type UploadTab = "local" | "api" | "s3";
+type UploadTab = "local" | "api" | "s3" | "html";
 
 type ApiFeedback = {
   state: "idle" | "loading" | "success" | "error";
@@ -81,6 +82,13 @@ const uploadTabs = [
     title: "API Endpoint",
     description: "Send JSON payloads programmatically.",
     icon: ServerStackIcon,
+    disabled: false,
+  },
+  {
+    id: "html" as const,
+    title: "Webpage URL",
+    description: "Fetch live HTML from a URL string.",
+    icon: GlobeAltIcon,
     disabled: false,
   },
 ];
@@ -202,6 +210,7 @@ export default function IngestionPage() {
   const [localFileText, setLocalFileText] = useState<string | null>(null);
   const [apiPayload, setApiPayload] = useState("");
   const [s3Uri, setS3Uri] = useState("");
+  const [htmlUrl, setHtmlUrl] = useState("");
   const [treeNodes, setTreeNodes] = useState<TreeNode[]>([]);
   const [previewLabel, setPreviewLabel] = useState("Awaiting content");
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
@@ -227,9 +236,9 @@ export default function IngestionPage() {
   }, [treeNodes]);
 
   useEffect(() => {
-    if (activeTab === "s3") {
+    if (activeTab === "s3" || activeTab === "html") {
       setTreeNodes([]);
-      setPreviewLabel("Structure preview unavailable for S3/classpath sources.");
+      setPreviewLabel("Structure preview unavailable for external sources.");
     } else if (activeTab === "local" && localFileText) {
       const parsed = safeJsonParse(localFileText);
       if (parsed) {
@@ -359,6 +368,8 @@ export default function IngestionPage() {
         await processLocalExtraction();
       } else if (activeTab === "api") {
         await processApiExtraction();
+      } else if (activeTab === "html") {
+        await processHtmlExtraction();
       } else {
         await processS3Extraction();
       }
@@ -436,6 +447,13 @@ export default function IngestionPage() {
     try {
       const formData = new FormData();
       formData.append("file", localFile);
+      if (payloadPageId) {
+        formData.append("site", payloadPageId);
+      }
+      const effectiveLocale = filenameLocale ?? payloadLocale;
+      if (effectiveLocale) {
+        formData.append("locale", effectiveLocale);
+      }
 
       const response = await fetch("/api/ingestion/upload", {
         method: "POST",
@@ -596,7 +614,13 @@ export default function IngestionPage() {
       const response = await fetch("/api/ingestion/payload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ payload: parsed }),
+      body: JSON.stringify({
+        payload: parsed,
+        metadata: {
+          site: payloadMetadata.pageId ?? undefined,
+          locale: payloadMetadata.locale ?? undefined,
+        },
+      }),
       });
       const payload = await response.json();
       const details = parseBackendPayload(payload);
@@ -838,6 +862,123 @@ export default function IngestionPage() {
     router.push("/extraction");
   };
 
+  const processHtmlExtraction = async () => {
+    const normalized = htmlUrl.trim();
+    if (!normalized.startsWith("http")) {
+      setExtractFeedback({
+        state: "error",
+        message: "Provide a valid http or https URL.",
+      });
+      setExtracting(false);
+      return;
+    }
+
+    setS3Feedback({ state: "loading" });
+    const uploadId = generateId();
+    setUploads((previous) => [
+      {
+        id: uploadId,
+        name: normalized,
+        size: 0,
+        type: "text/uri-list",
+        source: "HTML",
+        status: "uploading",
+        createdAt: Date.now(),
+      },
+      ...previous,
+    ]);
+
+    // This will post to a Next.js API route that proxies to UnstructuredDataController
+    const response = await fetch("/api/ingestion/html", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: normalized }),
+    });
+    const payload = await response.json();
+    const details = parseBackendPayload(payload);
+
+    setUploads((previous) =>
+      previous.map((upload) =>
+        upload.id === uploadId
+          ? {
+            ...upload,
+            status: response.ok ? "success" : "error",
+            backendStatus: response.ok ? "ACCEPTED" : "ERROR",
+            backendMessage: details.message,
+          }
+          : upload,
+      ),
+    );
+
+    if (!response.ok) {
+      setExtractFeedback({
+        state: "error",
+        message: details.message ?? "Backend rejected the HTML URL request.",
+      });
+      setExtracting(false);
+      return;
+    }
+
+    const metadata: ExtractionContext["metadata"] = {
+      name: normalized,
+      size: payload?.body ? new Blob([JSON.stringify(payload.body)]).size : 0,
+      source: "HTML",
+      cleansedId: details.cleansedId,
+      status: details.status,
+      uploadedAt: Date.now(),
+      sourceIdentifier: details.sourceIdentifier,
+      sourceType: details.sourceType,
+      locale: details.locale,
+      pageId: details.pageId,
+    };
+
+    const snapshotId = details.cleansedId ?? uploadId;
+    let snapshotPersisted = false;
+    let resolvedSnapshotId: string | undefined;
+
+    if (snapshotId) {
+      const snapshotResult = await persistSnapshot(snapshotId, {
+        mode: "api",
+        metadata,
+        rawJson: payload.body?.body ? JSON.stringify(payload.body.body, null, 2) : (payload.body ? JSON.stringify(payload.body, null, 2) : undefined),
+        tree: payload.body?.body ? seedPreviewTree("HTML Payload", payload.body.body) : (payload.body ? seedPreviewTree("HTML Payload", payload.body) : undefined),
+        backendPayload: payload,
+      });
+      snapshotPersisted = snapshotResult.ok;
+      resolvedSnapshotId = snapshotResult.snapshotId;
+      if (!snapshotResult.ok) {
+        console.warn("Unable to cache HTML extraction snapshot", snapshotResult.message);
+      }
+    }
+
+    const persistenceResult = saveExtractionContext({
+      mode: "api",  // Route to the standard API renderer
+      metadata,
+      snapshotId: snapshotPersisted ? resolvedSnapshotId ?? snapshotId : undefined,
+      tree: payload.body?.body ? seedPreviewTree("HTML Payload", payload.body.body) : (payload.body ? seedPreviewTree("HTML Payload", payload.body) : undefined),
+      rawJson: payload.body?.body ? JSON.stringify(payload.body.body, null, 2) : (payload.body ? JSON.stringify(payload.body, null, 2) : undefined),
+      backendPayload: snapshotPersisted ? undefined : payload,
+    });
+
+    if (!persistenceResult.ok) {
+      setExtractFeedback({
+        state: "error",
+        message: describeExtractionPersistenceError(persistenceResult),
+      });
+      setExtracting(false);
+      return;
+    }
+
+    setExtractFeedback({
+      state: "success",
+      message: "HTML Extraction ready. Redirecting to Cleansing...",
+    });
+
+    setExtracting(false);
+    // Route to the standard Extraction tree page so the user can review before cleansing.
+    router.push("/extraction");
+  };
+
   const parseBackendPayload = (payload: any) => {
     const body = payload?.body;
     const rawBody = payload?.rawBody;
@@ -850,14 +991,19 @@ export default function IngestionPage() {
       bodyRecord?.metadata && typeof bodyRecord.metadata === "object"
         ? (bodyRecord.metadata as Record<string, unknown>)
         : null;
+    const innerBody =
+      bodyRecord?.body && typeof bodyRecord.body === "object"
+        ? (bodyRecord.body as Record<string, unknown>)
+        : null;
 
     const cleansedId =
       pickString(bodyRecord?.cleansedDataStoreId) ??
       pickString(bodyRecord?.cleansedId) ??
+      pickString(bodyRecord?.processId) ??
       pickString(bodyRecord?.id);
     const status = pickString(bodyRecord?.status);
-    const locale = pickLocale(metadataRecord) ?? pickLocale(bodyRecord);
-    const pageId = pickPageId(metadataRecord) ?? pickPageId(bodyRecord);
+    const locale = pickLocale(metadataRecord) ?? pickLocale(innerBody) ?? pickLocale(bodyRecord);
+    const pageId = pickPageId(metadataRecord) ?? pickPageId(innerBody) ?? pickPageId(bodyRecord);
 
     const pickMessage = (source: unknown) => {
       const direct = pickString(source);
@@ -1093,7 +1239,7 @@ export default function IngestionPage() {
                   <p className="text-sm text-slate-500">Drag and drop JSON, paste payloads, or point at S3/classpath URIs.</p>
                 </div>
               </div>
-              <div className="mt-6 grid gap-3 sm:grid-cols-3">
+              <div className="mt-6 grid gap-3 sm:grid-cols-4">
                 {uploadTabs.map((tab) => {
                   const isActive = activeTab === tab.id;
                   const Icon = tab.icon;
@@ -1195,6 +1341,25 @@ export default function IngestionPage() {
                     Accepts s3://bucket/key or classpath:relative/path references.
                   </p>
                   <FeedbackPill feedback={s3Feedback} />
+                </div>
+              )}
+
+              {activeTab === "html" && (
+                <div className="mt-6 space-y-4">
+                  <div className="flex items-center gap-2 text-sm font-bold text-gray-900">
+                    <GlobeAltIcon className="size-5 text-slate-900" />
+                    Webpage URL
+                  </div>
+                  <input
+                    type="text"
+                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-base focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-900"
+                    placeholder="https://www.apple.com/iphone-17-pro/"
+                    value={htmlUrl}
+                    onChange={(e) => setHtmlUrl(e.target.value)}
+                  />
+                  <p className="text-xs text-slate-500">
+                    The backend will securely fetch the DOM and extract text and images seamlessly.
+                  </p>
                 </div>
               )}
             </div>

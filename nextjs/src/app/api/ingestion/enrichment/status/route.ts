@@ -144,9 +144,9 @@ const deriveHistory = (
   return ordered.length
     ? ordered
     : [
-        { status: "ENRICHMENT_TRIGGERED", timestamp: startedAt || Date.now() },
-        { status: "WAITING_FOR_RESULTS", timestamp: (startedAt || Date.now()) + 60_000 },
-      ];
+      { status: "ENRICHMENT_TRIGGERED", timestamp: startedAt || Date.now() },
+      { status: "WAITING_FOR_RESULTS", timestamp: (startedAt || Date.now()) + 60_000 },
+    ];
 };
 
 export async function GET(request: NextRequest) {

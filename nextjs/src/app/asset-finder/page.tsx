@@ -15,6 +15,8 @@ type AssetFinderOptions = {
   environments: string[];
   projects: string[];
   sites: string[];
+  pageContexts: string[];
+  siteToPageContexts: Record<string, string[]>;
   geos: string[];
   geoToLocales: Record<string, string[]>;
 };
@@ -24,6 +26,7 @@ type AssetFinderFilters = {
   environment: string;
   project: string;
   site: string;
+  pageContext: string;
   geo: string;
   locale: string;
 };
@@ -34,10 +37,12 @@ type AssetFinderTile = {
   assetModel?: string;
   sectionPath?: string;
   sectionUri?: string;
+  assetNodePath?: string;
   interactivePath?: string;
   previewUri?: string;
   locale?: string;
   site?: string;
+  pageContext?: string;
   geo?: string;
   altText?: string;
 };
@@ -56,6 +61,7 @@ type AssetFinderDetail = {
   environment?: string;
   project?: string;
   site?: string;
+  pageContext?: string;
   geo?: string;
   locale?: string;
   assetKey?: string;
@@ -71,11 +77,20 @@ type AssetFinderDetail = {
   metadata?: Record<string, unknown>;
 };
 
+type AssetTileGroup = {
+  key: string;
+  representative: AssetFinderTile;
+  variants: AssetFinderTile[];
+  variantLabels: string[];
+};
+
 const DEFAULT_OPTIONS: AssetFinderOptions = {
   tenants: ["applecom-cms"],
   environments: ["stage", "prod", "qa"],
   projects: ["rome"],
-  sites: ["ipad", "mac"],
+  sites: ["ipad", "mac", "airpods", "education", "iphone-17-pro"],
+  pageContexts: ["overview", "specs", "compare"],
+  siteToPageContexts: {},
   geos: ["WW", "JP", "KR"],
   geoToLocales: {
     WW: ["en_US"],
@@ -92,6 +107,7 @@ const buildInitialFilters = (options: AssetFinderOptions): AssetFinderFilters =>
     environment: options.environments[0] ?? "stage",
     project: options.projects[0] ?? "rome",
     site: options.sites[0] ?? "ipad",
+    pageContext: "",
     geo,
     locale,
   };
@@ -124,6 +140,221 @@ const normalizeLocaleValue = (locale: string | undefined) => {
   return normalized;
 };
 
+const detectViewportLabel = (path: string | undefined) => {
+  if (!path) return "default";
+  const lower = path.toLowerCase();
+  if (lower.includes("/small/")) return "small";
+  if (lower.includes("/medium/")) return "medium";
+  if (lower.includes("/large/")) return "large";
+  return "default";
+};
+
+const imageIdentityFromPath = (path: string | undefined) => {
+  if (!path) return null;
+  let normalized = path.trim().toLowerCase();
+  if (!normalized) return null;
+  normalized = normalized.replace(/^https?:\/\/[^/]+/, "");
+  normalized = normalized.split("?")[0] ?? normalized;
+  normalized = normalized.replace(/\/(small|medium|large)\//g, "/");
+  normalized = normalized.replace(/\/{2,}/g, "/");
+
+  const lastSlash = normalized.lastIndexOf("/");
+  if (lastSlash < 0) return normalized;
+  const dir = normalized.substring(0, lastSlash + 1);
+  const file = normalized.substring(lastSlash + 1);
+  const dot = file.lastIndexOf(".");
+  const ext = dot >= 0 ? file.substring(dot) : "";
+  let stem = dot >= 0 ? file.substring(0, dot) : file;
+
+  // Remove retina marker and opaque hash-like suffixes.
+  stem = stem.replace(/_2x$/g, "");
+  stem = stem.replace(/_[a-f0-9]{7,}$/g, "");
+
+  return `${dir}${stem}${ext}`;
+};
+
+const normalizeTextKey = (value: string | undefined) =>
+  (value ?? "").toLowerCase().trim().replace(/\s+/g, " ");
+
+const canonicalAssetGroupKey = (tile: AssetFinderTile) => {
+  const sectionAnchor = (tile.sectionPath ?? tile.sectionUri ?? "").toLowerCase().trim();
+  const nodeAnchor = (tile.assetNodePath ?? "").toLowerCase().trim();
+  const imageIdentity =
+    imageIdentityFromPath(tile.interactivePath) ?? imageIdentityFromPath(tile.previewUri);
+  // Strongest identity for UI dedupe: same section slot + same normalized image identity.
+  if (sectionAnchor && imageIdentity) {
+    return `${sectionAnchor}::${imageIdentity}`;
+  }
+  if (nodeAnchor) {
+    return nodeAnchor;
+  }
+  if (imageIdentity) {
+    return imageIdentity;
+  }
+
+  const assetAnchor = (tile.assetKey ?? "").toLowerCase().trim();
+  // Preferred grouping key: same section slot + same asset key.
+  // This is stable across viewport variants even when filenames differ.
+  if (sectionAnchor && assetAnchor) {
+    return `${sectionAnchor}::${assetAnchor}`;
+  }
+
+  const raw = tile.interactivePath ?? tile.previewUri ?? tile.assetKey ?? tile.id;
+  const normalized = (raw ?? "").toLowerCase();
+  return normalized
+    // Treat size folders as optional so default + small/medium/large collapse to one card.
+    .replace(/\/(small|medium|large)\//g, "/")
+    // Collapse explicit size tokens in filenames as well.
+    .replace(/(_small|_medium|_large)(?=\.)/g, "")
+    // Normalize duplicate slashes after removing size segment.
+    .replace(/\/{2,}/g, "/");
+};
+
+const buildGroupedAssets = (items: AssetFinderTile[]) => {
+  const groups = new Map<string, AssetTileGroup>();
+
+  for (const item of items) {
+    const key = canonicalAssetGroupKey(item);
+    const existing = groups.get(key);
+    if (!existing) {
+      groups.set(key, {
+        key,
+        representative: item,
+        variants: [item],
+        variantLabels: [detectViewportLabel(item.interactivePath ?? item.previewUri)],
+      });
+      continue;
+    }
+    existing.variants.push(item);
+    const label = detectViewportLabel(item.interactivePath ?? item.previewUri);
+    if (!existing.variantLabels.includes(label)) {
+      existing.variantLabels.push(label);
+    }
+  }
+
+  for (const group of groups.values()) {
+    // Prefer medium, then large, then small as tile preview.
+    const preferred = ["medium", "large", "small", "default"];
+    const pick = preferred
+      .map((label) =>
+        group.variants.find(
+          (v) => detectViewportLabel(v.interactivePath ?? v.previewUri) === label
+        )
+      )
+      .find(Boolean);
+    if (pick) {
+      group.representative = pick;
+    }
+    // If explicit viewport variants exist, suppress "default" chip to avoid duplicate-card confusion.
+    if (
+      group.variantLabels.includes("default") &&
+      group.variantLabels.some((label) => label === "small" || label === "medium" || label === "large")
+    ) {
+      group.variantLabels = group.variantLabels.filter((label) => label !== "default");
+    }
+    group.variantLabels.sort((a, b) => {
+      const rank = (value: string) =>
+        value === "small" ? 0 : value === "medium" ? 1 : value === "large" ? 2 : 3;
+      return rank(a) - rank(b);
+    });
+  }
+
+  const groupedList = Array.from(groups.values());
+  const assetKeysWithSizedVariants = new Set(
+    groupedList
+      .filter((group) =>
+        group.variantLabels.some((label) => label === "small" || label === "medium" || label === "large")
+      )
+      .map((group) => (group.representative.assetKey ?? "").toLowerCase().trim())
+      .filter(Boolean)
+  );
+  const sectionAnchorsWithSizedVariants = new Set(
+    groupedList
+      .filter((group) =>
+        group.variantLabels.some((label) => label === "small" || label === "medium" || label === "large")
+      )
+      .map((group) =>
+        (
+          group.representative.sectionPath ??
+          group.representative.sectionUri ??
+          ""
+        ).toLowerCase().trim()
+      )
+      .filter(Boolean)
+  );
+  const sectionAltWithSizedVariants = new Set(
+    groupedList
+      .filter((group) =>
+        group.variantLabels.some((label) => label === "small" || label === "medium" || label === "large")
+      )
+      .map((group) => {
+        const sectionAnchor = (
+          group.representative.sectionPath ??
+          group.representative.sectionUri ??
+          ""
+        ).toLowerCase().trim();
+        const alt = normalizeTextKey(group.representative.altText);
+        return sectionAnchor && alt ? `${sectionAnchor}::${alt}` : "";
+      })
+      .filter(Boolean)
+  );
+
+  // If an asset key has explicit size variants, hide default-only duplicates for that key.
+  return groupedList.filter((group) => {
+    const key = (group.representative.assetKey ?? "").toLowerCase().trim();
+    const isDefaultOnly =
+      group.variantLabels.length === 1 && group.variantLabels[0] === "default";
+    if (!key || !isDefaultOnly) return true;
+    if (assetKeysWithSizedVariants.has(key)) return false;
+
+    // Fallback suppression: same section has explicit sized variants.
+    const sectionAnchor = (
+      group.representative.sectionPath ??
+      group.representative.sectionUri ??
+      ""
+    ).toLowerCase().trim();
+    if (sectionAnchor && sectionAnchorsWithSizedVariants.has(sectionAnchor)) return false;
+
+    // Strong fallback: same section + same alt text has sized variants.
+    const alt = normalizeTextKey(group.representative.altText);
+    if (sectionAnchor && alt && sectionAltWithSizedVariants.has(`${sectionAnchor}::${alt}`)) {
+      return false;
+    }
+    return true;
+  });
+};
+
+const pickViewportPath = (detail: AssetFinderDetail) => {
+  const viewports = detail.viewports ?? {};
+  const preferredOrder = ["default", "viewportSmall", "viewportMedium", "viewportLarge"];
+
+  for (const key of preferredOrder) {
+    const value = viewports[key] as Record<string, unknown> | undefined;
+    if (!value) continue;
+    const candidate =
+      (value.uri as string | undefined) ??
+      (value.uri1x as string | undefined) ??
+      (value.uri2x as string | undefined) ??
+      (value._uri_path as string | undefined) ??
+      (value._uri1x_path as string | undefined);
+    if (candidate) return candidate;
+  }
+
+  for (const value of Object.values(viewports)) {
+    if (!value || typeof value !== "object") continue;
+    const vp = value as Record<string, unknown>;
+    const candidate =
+      (vp.uri as string | undefined) ??
+      (vp.uri1x as string | undefined) ??
+      (vp.uri2x as string | undefined) ??
+      (vp._uri_path as string | undefined) ??
+      (vp._uri1x_path as string | undefined);
+    if (candidate) return candidate;
+  }
+
+  return detail.interactivePath;
+};
+
 const UI_COLORS = {
   pageBg: "#ffffff",
   panelBg: "#ffffff",
@@ -143,13 +374,14 @@ const UI_COLORS = {
 const FILTER_PANEL_SHADOW = "0 1px 3px rgba(15, 23, 42, 0.08)";
 const BUTTON_SHADOW = "0 1px 2px rgba(15, 23, 42, 0.18)";
 const TILE_SHADOW = "0 2px 7px rgba(15, 23, 42, 0.16)";
-const SEARCH_PAGE_SIZE = 200;
+const SEARCH_PAGE_SIZE = 1000;
 
 const FILTER_HELP_TEXT = {
   tenant: "Content source tenant (for example: applecom-cms).",
   environment: "Deployment environment for this content (stage, prod, qa).",
   project: "Project or campaign grouping for uploaded content.",
   site: "Site or page family (for example: ipad, mac).",
+  pageContext: "Optional subpage context within a site (overview, specs, compare).",
   geo: "Business geo/region grouping used for filtering.",
   locale: "Locale code for language + country (for example: en_CA).",
 } as const;
@@ -182,7 +414,7 @@ function TilePreview({ path, label }: { path?: string; label: string }) {
     <img
       src={normalized}
       alt={label}
-      className="aspect-square w-full object-contain p-6"
+      className="aspect-square w-full object-scale-down p-6"
       style={{ backgroundColor: UI_COLORS.tilePreviewBg }}
       loading="lazy"
       onError={() => setLoadFailed(true)}
@@ -212,6 +444,7 @@ export default function AssetFinderPage() {
   const [detail, setDetail] = useState<AssetFinderDetail | null>(null);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [detailVariantLabels, setDetailVariantLabels] = useState<string[]>([]);
   const [showLocaleSpecificAssets, setShowLocaleSpecificAssets] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
   const filterLabelClass = "mb-1 inline-flex items-center gap-1 text-xs font-semibold";
@@ -224,6 +457,18 @@ export default function AssetFinderPage() {
     return options.geoToLocales?.[filters.geo] ?? [];
   }, [options, filters.geo]);
 
+  const pageContextsForSite = useMemo(() => {
+    const bySite = options.siteToPageContexts?.[filters.site] ?? [];
+    const source = bySite.length ? bySite : options.pageContexts ?? DEFAULT_OPTIONS.pageContexts;
+    return Array.from(new Set(source)).sort();
+  }, [options, filters.site]);
+
+  useEffect(() => {
+    if (!filters.pageContext) return;
+    if (pageContextsForSite.includes(filters.pageContext)) return;
+    setFilters((prev) => ({ ...prev, pageContext: "" }));
+  }, [filters.pageContext, pageContextsForSite]);
+
   const visibleItems = useMemo(() => {
     const items = results?.items ?? [];
     if (!showLocaleSpecificAssets) return items;
@@ -231,6 +476,8 @@ export default function AssetFinderPage() {
     if (!selectedLocale) return items;
     return items.filter((item) => normalizeLocaleValue(item.locale) === selectedLocale);
   }, [results, showLocaleSpecificAssets, filters.locale]);
+
+  const groupedItems = useMemo(() => buildGroupedAssets(visibleItems), [visibleItems]);
 
   useEffect(() => {
     let active = true;
@@ -245,11 +492,24 @@ export default function AssetFinderPage() {
         }
         const parsed = payload ?? DEFAULT_OPTIONS;
         if (!active) return;
+        // Merge backend-discovered sites with hardcoded defaults so entries like
+        // 'iphone-17-pro' and 'education' always appear even before ingestion.
+        const mergedSites = Array.from(
+          new Set([...(parsed.sites ?? []), ...DEFAULT_OPTIONS.sites])
+        );
+        const mergedPageContexts = Array.from(
+          new Set([...(parsed.pageContexts ?? []), ...DEFAULT_OPTIONS.pageContexts])
+        );
         setOptions({
           tenants: parsed.tenants?.length ? parsed.tenants : DEFAULT_OPTIONS.tenants,
           environments: parsed.environments?.length ? parsed.environments : DEFAULT_OPTIONS.environments,
           projects: parsed.projects?.length ? parsed.projects : DEFAULT_OPTIONS.projects,
-          sites: parsed.sites?.length ? parsed.sites : DEFAULT_OPTIONS.sites,
+          sites: mergedSites,
+          pageContexts: mergedPageContexts,
+          siteToPageContexts:
+            parsed.siteToPageContexts && Object.keys(parsed.siteToPageContexts).length
+              ? parsed.siteToPageContexts
+              : DEFAULT_OPTIONS.siteToPageContexts,
           geos: parsed.geos?.length ? parsed.geos : DEFAULT_OPTIONS.geos,
           geoToLocales:
             parsed.geoToLocales && Object.keys(parsed.geoToLocales).length
@@ -307,18 +567,47 @@ export default function AssetFinderPage() {
     setError(null);
   };
 
-  const openDetail = async (assetId: string) => {
+  const openDetail = async (group: AssetTileGroup) => {
     setIsDetailLoading(true);
     setDetailError(null);
     try {
-      const response = await fetch(`/api/asset-finder/assets/${encodeURIComponent(assetId)}`);
-      const payload = await parseProxyPayload<AssetFinderDetail>(response);
-      if (!response.ok) {
+      const ids = group.variants.map((variant) => variant.id);
+      const responses = await Promise.all(
+        ids.map((id) => fetch(`/api/asset-finder/assets/${encodeURIComponent(id)}`))
+      );
+      const payloads = await Promise.all(
+        responses.map((response) => parseProxyPayload<AssetFinderDetail>(response))
+      );
+      if (responses.some((response) => !response.ok)) {
         throw new Error("Unable to load asset metadata.");
       }
-      setDetail(payload);
+
+      const details = payloads.filter((value): value is AssetFinderDetail => Boolean(value));
+      if (!details.length) {
+        throw new Error("Unable to load asset metadata.");
+      }
+      const representative = details[0];
+      const mergedViewports: Record<string, Record<string, unknown>> = {};
+      for (let index = 0; index < details.length; index++) {
+        const current = details[index];
+        const label = detectViewportLabel(
+          group.variants[index]?.interactivePath ?? group.variants[index]?.previewUri
+        );
+        const candidatePath = pickViewportPath(current);
+        if (!candidatePath) continue;
+        mergedViewports[label] = { uri: candidatePath };
+      }
+
+      setDetail({
+        ...representative,
+        viewports: Object.keys(mergedViewports).length
+          ? mergedViewports
+          : representative.viewports,
+      });
+      setDetailVariantLabels(group.variantLabels);
     } catch (loadError) {
       setDetail(null);
+      setDetailVariantLabels([]);
       setDetailError(loadError instanceof Error ? loadError.message : "Unable to load asset metadata.");
     } finally {
       setIsDetailLoading(false);
@@ -361,7 +650,7 @@ export default function AssetFinderPage() {
             boxShadow: FILTER_PANEL_SHADOW,
           }}
         >
-          <div className="grid gap-2.5 md:grid-cols-3 xl:grid-cols-[repeat(6,minmax(0,1fr))_auto_auto_auto]">
+          <div className="grid gap-2.5 md:grid-cols-3 xl:grid-cols-[repeat(7,minmax(0,1fr))_auto_auto_auto]">
             <label className="block">
               <span className={filterLabelClass} style={{ color: UI_COLORS.label }}>
                 Tenant <DropdownHelp text={FILTER_HELP_TEXT.tenant} />
@@ -419,11 +708,31 @@ export default function AssetFinderPage() {
               </span>
               <select
                 value={filters.site}
-                onChange={(event) => setFilters((prev) => ({ ...prev, site: event.target.value }))}
+                onChange={(event) =>
+                  setFilters((prev) => ({ ...prev, site: event.target.value, pageContext: "" }))
+                }
                 className={filterSelectClass}
                 style={{ borderColor: UI_COLORS.inputBorder, borderRadius: "9999px" }}
               >
                 {options.sites.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className={filterLabelClass} style={{ color: UI_COLORS.label }}>
+                Subpage <DropdownHelp text={FILTER_HELP_TEXT.pageContext} />
+              </span>
+              <select
+                value={filters.pageContext}
+                onChange={(event) => setFilters((prev) => ({ ...prev, pageContext: event.target.value }))}
+                className={filterSelectClass}
+                style={{ borderColor: UI_COLORS.inputBorder, borderRadius: "9999px" }}
+              >
+                <option value="">All subpages</option>
+                {pageContextsForSite.map((value) => (
                   <option key={value} value={value}>
                     {value}
                   </option>
@@ -510,7 +819,7 @@ export default function AssetFinderPage() {
         <section className="mt-3">
           <div className="mb-3 flex items-center justify-between gap-3">
             <p className="text-sm font-medium" style={{ color: UI_COLORS.count }}>
-              Count : {visibleItems.length}/{results?.count ?? visibleItems.length}
+              Count : {groupedItems.length}/{groupedItems.length}
             </p>
             <label className="inline-flex items-center gap-2 text-sm" style={{ color: UI_COLORS.count }}>
               <input
@@ -531,9 +840,11 @@ export default function AssetFinderPage() {
           )}
 
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {visibleItems.map((tile) => (
+            {groupedItems.map((group) => {
+              const tile = group.representative;
+              return (
               <article
-                key={tile.id}
+                key={group.key}
                 className="overflow-hidden rounded-2xl border bg-white"
                 style={{
                   borderColor: UI_COLORS.tileBorder,
@@ -567,7 +878,7 @@ export default function AssetFinderPage() {
                     </p>
                     <button
                       type="button"
-                      onClick={() => openDetail(tile.id)}
+                      onClick={() => openDetail(group)}
                       className="shrink-0 rounded-full p-0.5 transition hover:bg-slate-300/50"
                       style={{ color: "#787878" }}
                       title="View metadata"
@@ -577,10 +888,10 @@ export default function AssetFinderPage() {
                   </div>
                 </div>
               </article>
-            ))}
+            )})}
           </div>
 
-          {!isFiltering && visibleItems.length === 0 && (
+          {!isFiltering && groupedItems.length === 0 && (
             <div className="mt-6 rounded border border-dashed border-slate-300 bg-white/70 px-4 py-8 text-center text-sm text-slate-500">
               No assets available for the selected filters.
             </div>
@@ -598,6 +909,7 @@ export default function AssetFinderPage() {
                 onClick={() => {
                   setDetail(null);
                   setDetailError(null);
+                  setDetailVariantLabels([]);
                 }}
                 className="rounded-full p-1 transition hover:bg-white/10"
               >
@@ -619,12 +931,19 @@ export default function AssetFinderPage() {
               )}
               {detail && (
                 <div className="space-y-5">
+                  {!!detailVariantLabels.length && (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      <span className="font-semibold">Available sizes:</span>{" "}
+                      {detailVariantLabels.join(", ")}
+                    </div>
+                  )}
                   <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
                     {[
                       ["Tenant", detail.tenant],
                       ["Environment", detail.environment],
                       ["Project", detail.project],
                       ["Site", detail.site],
+                      ["Page Context", detail.pageContext],
                       ["Geo", detail.geo],
                       ["Locale", detail.locale],
                       ["Asset Key", detail.assetKey],

@@ -16,10 +16,12 @@ public class AssetFinderTileDto {
     private String assetModel;
     private String sectionPath;
     private String sectionUri;
+    private String assetNodePath;
     private String interactivePath;
     private String previewUri;
     private String locale;
     private String site;
+    private String pageContext;
     private String geo;
     private String altText;
 }

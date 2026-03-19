@@ -99,7 +99,7 @@ public class RefinementService {
                 // Extract from nested context based on simplified requirements
                 if (section.getContext() != null) {
                     JsonNode contextNode = objectMapper.valueToTree(section.getContext());
-                    extractContextChips(contextNode.path("facets"), List.of("sectionKey", "sectionName", "eventType"),
+                    extractContextChips(contextNode.path("facets"), List.of("sectionKey", "sectionName", "analyticsRegionSlug", "eventType"),
                             "facets", chipScores, score);
                     extractContextChips(contextNode.path("envelope"), List.of("sectionName", "locale", "country"),
                             "envelope", chipScores, score);
@@ -192,7 +192,7 @@ public class RefinementService {
         if (section.getContext() != null) {
             JsonNode contextNode = objectMapper.valueToTree(section.getContext());
             extractContextChipsForCounting(contextNode.path("facets"),
-                    List.of("sectionKey", "sectionName", "sectionModel", "eventType"), "facets", chips);
+                    List.of("sectionKey", "sectionName", "sectionModel", "analyticsRegionSlug", "eventType"), "facets", chips);
             extractContextChipsForCounting(contextNode.path("envelope"), List.of("sectionName", "locale", "country"),
                     "envelope", chips);
         }
@@ -242,6 +242,11 @@ public class RefinementService {
         }
         Object facetsObj = context.get("facets");
         if (facetsObj instanceof Map<?, ?> facets) {
+            // Prefer analyticsRegionSlug when present (semantic label, e.g. "why-apple")
+            Object analyticsSlug = facets.get("analyticsRegionSlug");
+            if (analyticsSlug instanceof String s && StringUtils.hasText(s)) {
+                return s.toLowerCase(Locale.ROOT);
+            }
             Object sectionKey = facets.get("sectionKey");
             if (sectionKey instanceof String s && StringUtils.hasText(s)) {
                 return s.toLowerCase(Locale.ROOT);

@@ -16,6 +16,8 @@ public class AssetFinderOptionsResponse {
     private List<String> environments;
     private List<String> projects;
     private List<String> sites;
+    private List<String> pageContexts;
+    private Map<String, List<String>> siteToPageContexts;
     private List<String> geos;
     private Map<String, List<String>> geoToLocales;
 }

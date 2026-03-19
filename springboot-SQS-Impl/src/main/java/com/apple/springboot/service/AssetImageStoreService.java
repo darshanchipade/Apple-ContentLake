@@ -56,9 +56,11 @@ import java.util.stream.Collectors;
  * Extracts image metadata from uploaded JSON and serves Asset Finder queries.
  *
  * Normalized design (Option 3):
- * - asset_metadata_catalog: canonical metadata rows deduplicated by metadata_hash.
+ * - asset_metadata_catalog: canonical metadata rows deduplicated by
+ * metadata_hash.
  * - asset_metadata_occurrence: latest-only rows per source_uri + slot.
- * - asset_metadata_occurrence_audit: append-only history of occurrence mutations.
+ * - asset_metadata_occurrence_audit: append-only history of occurrence
+ * mutations.
  */
 @Service
 public class AssetImageStoreService {
@@ -69,32 +71,32 @@ public class AssetImageStoreService {
     private static final Pattern TENANT_PATTERN = Pattern.compile("/content/dam/([^/]+)/");
     private static final Pattern SITE_FROM_ASSET_PATH = Pattern.compile("/assets-www/[a-z]{2}[_-][A-Z]{2}/([^/]+)/");
     private static final Pattern SITE_FROM_CONTENT_PATH = Pattern.compile("/live/[a-z]{2}[_-][A-Z]{2}/([^/]+)/");
-    private static final Set<String> URI_KEYS = Set.of("uri", "uri1x", "uri2x", "_uri_path", "_uri1x_path", "_uri2x_path");
+    private static final Pattern SITE_FROM_PUBLIC_PATH = Pattern
+            .compile("/[a-z]{2}[_-][A-Z]{2}/([^/]+)(?:/([^/?#]+))?");
+    private static final Set<String> URI_KEYS = Set.of("uri", "uri1x", "uri2x", "_uri_path", "_uri1x_path",
+            "_uri2x_path", "src", "url", "_path", "file", "link", "assetUrl");
     private static final List<String> ENVIRONMENTS = List.of("stage", "prod", "qa");
     private static final List<String> DEFAULT_PROJECTS = List.of("rome");
-    private static final List<String> DEFAULT_SITES = List.of("ipad", "mac");
+    private static final List<String> DEFAULT_SITES = List.of("ipad", "mac", "airpods");
+    private static final List<String> DEFAULT_PAGE_CONTEXTS = List.of("overview", "specs", "compare");
+    private static final Set<String> PAGE_CONTEXT_TOKENS = Set.of("overview", "specs", "compare");
     private static final List<String> GEO_GROUP_ORDER = List.of(
-            "Europe", "IN", "JP", "KR", "SEA", "WW", "CEMEA", "ANZ", "ALAC-CA"
-    );
+            "Europe", "IN", "JP", "KR", "SEA", "WW", "CEMEA", "ANZ", "ALAC-CA");
     private static final Set<String> EUROPE_COUNTRIES = Set.of(
             "AT", "BE", "BG", "CH", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "GB",
             "GR", "HR", "HU", "IE", "IS", "IT", "LI", "LT", "LU", "LV", "MT", "NL", "NO",
-            "PL", "PT", "RO", "SE", "SI", "SK"
-    );
+            "PL", "PT", "RO", "SE", "SI", "SK");
     private static final Set<String> SEA_COUNTRIES = Set.of(
-            "SG", "MY", "TH", "VN", "ID", "PH", "BN", "KH", "LA", "MM"
-    );
+            "SG", "MY", "TH", "VN", "ID", "PH", "BN", "KH", "LA", "MM");
     private static final Set<String> ANZ_COUNTRIES = Set.of("AU", "NZ");
     private static final Set<String> ALAC_CA_COUNTRIES = Set.of(
             "CA", "MX", "AR", "BO", "BR", "CL", "CO", "CR", "DO", "EC",
-            "SV", "GT", "HN", "NI", "PA", "PY", "PE", "UY", "VE"
-    );
+            "SV", "GT", "HN", "NI", "PA", "PY", "PE", "UY", "VE");
     private static final Set<String> CEMEA_COUNTRIES = Set.of(
             "AE", "SA", "QA", "KW", "OM", "BH", "JO", "IL", "EG", "MA", "TN", "DZ",
             "ZA", "NG", "KE", "UG", "CM", "CI", "BW", "MZ", "MU", "SN", "CF", "GW",
             "GN", "GQ", "ML", "NE", "AM", "AZ", "BY", "GE", "KZ", "KG", "MD", "ME",
-            "MK", "RU", "TJ", "TM", "UA", "UZ", "TR"
-    );
+            "MK", "RU", "TJ", "TM", "UA", "UZ", "TR");
 
     private final AssetMetadataCatalogRepository catalogRepository;
     private final AssetMetadataOccurrenceRepository occurrenceRepository;
@@ -133,13 +135,13 @@ public class AssetImageStoreService {
      * Creates a service for image extraction and Asset Finder access.
      */
     public AssetImageStoreService(AssetMetadataCatalogRepository catalogRepository,
-                                  AssetMetadataOccurrenceRepository occurrenceRepository,
-                                  AssetMetadataOccurrenceAuditRepository occurrenceAuditRepository,
-                                  AssetMetadataUploadSummaryRepository uploadSummaryRepository,
-                                  CleansedDataStoreRepository cleansedDataStoreRepository,
-                                  AssetRegionLocaleService assetRegionLocaleService,
-                                  ObjectMapper objectMapper,
-                                  JdbcTemplate jdbcTemplate) {
+            AssetMetadataOccurrenceRepository occurrenceRepository,
+            AssetMetadataOccurrenceAuditRepository occurrenceAuditRepository,
+            AssetMetadataUploadSummaryRepository uploadSummaryRepository,
+            CleansedDataStoreRepository cleansedDataStoreRepository,
+            AssetRegionLocaleService assetRegionLocaleService,
+            ObjectMapper objectMapper,
+            JdbcTemplate jdbcTemplate) {
         this.catalogRepository = catalogRepository;
         this.occurrenceRepository = occurrenceRepository;
         this.occurrenceAuditRepository = occurrenceAuditRepository;
@@ -167,10 +169,10 @@ public class AssetImageStoreService {
             List<ExtractedAssetCandidate> extracted = extractAssets(rootNode, rawDataStore, requestMetadata);
             List<ExtractedAssetCandidate> deduplicatedBySlot = deduplicateBySlot(extracted);
 
-            // Track observed geo/locale pairs from this upload independently of asset occurrence writes.
+            // Track observed geo/locale pairs from this upload independently of asset
+            // occurrence writes.
             assetRegionLocaleService.recordUploadObservations(
-                    buildUploadRegionObservations(deduplicatedBySlot, requestMetadata, rawDataStore.getId())
-            );
+                    buildUploadRegionObservations(deduplicatedBySlot, requestMetadata, rawDataStore.getId()));
 
             if (!areTablesPresent()) {
                 return;
@@ -287,7 +289,8 @@ public class AssetImageStoreService {
                     duplicate.setSourceVersion(rawDataStore.getVersion());
                     duplicate.setLastSeenVersion(rawDataStore.getVersion());
                     rowsToSave.add(duplicate);
-                    auditRows.add(buildAuditRow(rawDataStore, duplicate.getAssetSlotKey(), "DELETE", before, duplicate));
+                    auditRows
+                            .add(buildAuditRow(rawDataStore, duplicate.getAssetSlotKey(), "DELETE", before, duplicate));
                     deactivateCount++;
                 }
             }
@@ -313,8 +316,10 @@ public class AssetImageStoreService {
                         rawDataStore.getId(), summaryError.getMessage());
             }
 
-            logger.info("Asset metadata extraction complete for rawDataId {}. Current rows touched: {} (inserted={}, updated={}, unchanged={}, deactivated={}; pre-dedupe={}).",
-                    rawDataStore.getId(), rowsToSave.size(), insertCount, updateCount, unchangedCount, deactivateCount, extracted.size());
+            logger.info(
+                    "Asset metadata extraction complete for rawDataId {}. Current rows touched: {} (inserted={}, updated={}, unchanged={}, deactivated={}; pre-dedupe={}).",
+                    rawDataStore.getId(), rowsToSave.size(), insertCount, updateCount, unchangedCount, deactivateCount,
+                    extracted.size());
         } catch (Exception e) {
             logger.warn("Asset metadata extraction failed for rawDataId {}. Continuing ingestion pipeline. Reason: {}",
                     rawDataStore.getId(), e.getMessage());
@@ -338,6 +343,8 @@ public class AssetImageStoreService {
         }
 
         Set<String> sites = new LinkedHashSet<>(DEFAULT_SITES);
+        Set<String> pageContexts = new LinkedHashSet<>(DEFAULT_PAGE_CONTEXTS);
+        Map<String, Set<String>> siteToPageContexts = new LinkedHashMap<>();
         if (areTablesPresent()) {
             try {
                 sites.addAll(occurrenceRepository.findDistinctSites().stream()
@@ -346,6 +353,33 @@ public class AssetImageStoreService {
                         .toList());
             } catch (Exception e) {
                 logger.warn("Unable to load distinct asset sites; using defaults. Reason: {}", e.getMessage());
+            }
+            try {
+                for (AssetMetadataOccurrenceRepository.SitePathProjection row : occurrenceRepository.findDistinctSitePathTuples()) {
+                    if (row == null) {
+                        continue;
+                    }
+                    SitePageContext siteAndPage = deriveSiteAndPageContext(
+                            row.getSite(),
+                            row.getSectionPath(),
+                            row.getSectionUri(),
+                            row.getSourceUri(),
+                            null,
+                            null);
+                    String siteKey = normalizeLower(siteAndPage.site());
+                    if (siteKey == null) {
+                        continue;
+                    }
+                    sites.add(siteKey);
+                    String pageKey = normalizeLower(siteAndPage.pageContext());
+                    if (pageKey == null) {
+                        continue;
+                    }
+                    pageContexts.add(pageKey);
+                    siteToPageContexts.computeIfAbsent(siteKey, ignored -> new LinkedHashSet<>()).add(pageKey);
+                }
+            } catch (Exception e) {
+                logger.warn("Unable to derive page-context options from occurrences; using defaults. Reason: {}", e.getMessage());
             }
         }
         String configuredSite = normalizeText(defaultSite);
@@ -357,6 +391,14 @@ public class AssetImageStoreService {
         response.setEnvironments(ENVIRONMENTS);
         response.setProjects(new ArrayList<>(projects));
         response.setSites(new ArrayList<>(sites));
+        response.setPageContexts(new ArrayList<>(pageContexts));
+        Map<String, List<String>> normalizedSitePageContexts = new LinkedHashMap<>();
+        for (Map.Entry<String, Set<String>> entry : siteToPageContexts.entrySet()) {
+            List<String> values = new ArrayList<>(entry.getValue());
+            Collections.sort(values);
+            normalizedSitePageContexts.put(entry.getKey(), values);
+        }
+        response.setSiteToPageContexts(normalizedSitePageContexts);
         AssetRegionLocaleService.RegionOptionsSnapshot regionOptions = resolveRegionOptionsFromOccurrences();
         response.setGeos(regionOptions.geos());
         response.setGeoToLocales(regionOptions.geoToLocales());
@@ -364,7 +406,8 @@ public class AssetImageStoreService {
     }
 
     /**
-     * Builds geo/locale option maps from actual occurrence data first, then fallback reference table.
+     * Builds geo/locale option maps from actual occurrence data first, then
+     * fallback reference table.
      */
     private AssetRegionLocaleService.RegionOptionsSnapshot resolveRegionOptionsFromOccurrences() {
         if (!areTablesPresent()) {
@@ -372,8 +415,8 @@ public class AssetImageStoreService {
         }
 
         try {
-            List<AssetMetadataOccurrenceRepository.GeoLocaleProjection> pairs =
-                    occurrenceRepository.findDistinctGeoLocalePairs();
+            List<AssetMetadataOccurrenceRepository.GeoLocaleProjection> pairs = occurrenceRepository
+                    .findDistinctGeoLocalePairs();
             if (pairs == null || pairs.isEmpty()) {
                 return toGeoGroupedSnapshot(assetRegionLocaleService.getRegionOptionsSnapshot());
             }
@@ -403,7 +446,8 @@ public class AssetImageStoreService {
             }
             return grouped;
         } catch (Exception e) {
-            logger.warn("Unable to derive region options from occurrence rows. Falling back to locale reference. Reason: {}",
+            logger.warn(
+                    "Unable to derive region options from occurrence rows. Falling back to locale reference. Reason: {}",
                     e.getMessage());
             return toGeoGroupedSnapshot(assetRegionLocaleService.getRegionOptionsSnapshot());
         }
@@ -416,7 +460,7 @@ public class AssetImageStoreService {
     public AssetFinderSearchResponse search(AssetFinderFilterRequest request) {
         AssetFinderFilterRequest safeRequest = request != null ? request : new AssetFinderFilterRequest();
         int page = Math.max(0, Optional.ofNullable(safeRequest.getPage()).orElse(0));
-        int size = Math.max(1, Math.min(200, Optional.ofNullable(safeRequest.getSize()).orElse(200)));
+        int size = Math.max(1, Math.min(1000, Optional.ofNullable(safeRequest.getSize()).orElse(1000)));
 
         if (!areTablesPresent()) {
             AssetFinderSearchResponse empty = new AssetFinderSearchResponse();
@@ -432,6 +476,7 @@ public class AssetImageStoreService {
         String environment = normalizeText(safeRequest.getEnvironment());
         String project = normalizeText(safeRequest.getProject());
         String site = normalizeText(safeRequest.getSite());
+        String pageContext = normalizePageContext(safeRequest.getPageContext());
         String geo = normalizeText(safeRequest.getGeo());
         String locale = normalizeLocale(safeRequest.getLocale());
 
@@ -439,33 +484,194 @@ public class AssetImageStoreService {
             locale = mapGeoToLocale(geo).orElse(null);
         }
         if (locale != null) {
-            // Locale is the strongest selector and avoids mismatches with grouped geo labels.
+            // Locale is the strongest selector and avoids mismatches with grouped geo
+            // labels.
             geo = null;
         } else if (geo != null && isConfiguredGeoGroup(geo)) {
-            // Grouped geos (Europe/SEA/...) are option labels, not stored raw occurrence values.
+            // Grouped geos (Europe/SEA/...) are option labels, not stored raw occurrence
+            // values.
             geo = null;
         } else if (geo != null) {
             geo = normalizeGeo(geo);
         }
 
         Pageable pageable = PageRequest.of(page, size);
+        // Site metadata can be noisy/inconsistent in some legacy rows.
+        // When site is selected, fetch by other filters first and enforce site by path guard below.
+        String querySite = (site != null && !site.isBlank()) ? null : site;
         Page<AssetMetadataOccurrence> result = occurrenceRepository.search(
-                tenant, environment, project, site, geo, locale, pageable
-        );
+                tenant, environment, project, querySite, geo, locale, pageable);
 
         List<AssetMetadataOccurrence> occurrences = result.getContent();
         Map<UUID, AssetMetadataCatalog> catalogs = loadCatalogMap(occurrences);
+
+        // Additional site guard:
+        // some legacy rows may have coarse/inaccurate "site" metadata (e.g. defaulted during extraction).
+        // When user explicitly selects a site, enforce path-level alignment against section/source/image paths.
+        if (site != null && !site.isBlank()) {
+            String requestedSite = site.toLowerCase(Locale.ROOT);
+            occurrences = occurrences.stream()
+                    .filter(occurrence -> {
+                        AssetMetadataCatalog catalog = catalogs.get(occurrence.getCatalogId());
+                        return matchesSitePath(requestedSite, occurrence, catalog);
+                    })
+                    .toList();
+        }
+        if (pageContext != null && !pageContext.isBlank()) {
+            String requestedPageContext = pageContext.toLowerCase(Locale.ROOT);
+            occurrences = occurrences.stream()
+                    .filter(occurrence -> {
+                        AssetMetadataCatalog catalog = catalogs.get(occurrence.getCatalogId());
+                        return matchesPageContext(requestedPageContext, occurrence, catalog);
+                    })
+                    .toList();
+        }
+
         List<AssetFinderTileDto> tiles = occurrences.stream()
                 .map(occurrence -> toTileDto(occurrence, catalogs.get(occurrence.getCatalogId())))
                 .toList();
+        long groupedCount = computeGroupedAssetCount(occurrences, catalogs);
 
         AssetFinderSearchResponse response = new AssetFinderSearchResponse();
-        response.setCount(result.getTotalElements());
+        response.setCount(groupedCount);
         response.setPage(result.getNumber());
         response.setSize(result.getSize());
-        response.setTotalPages(result.getTotalPages());
+        int groupedTotalPages = result.getSize() > 0
+                ? (int) Math.ceil((double) groupedCount / result.getSize())
+                : 0;
+        response.setTotalPages(groupedTotalPages);
         response.setItems(tiles);
         return response;
+    }
+
+    private long computeGroupedAssetCount(List<AssetMetadataOccurrence> occurrences,
+            Map<UUID, AssetMetadataCatalog> catalogs) {
+        if (occurrences == null || occurrences.isEmpty()) {
+            return 0L;
+        }
+        Set<String> keys = new LinkedHashSet<>();
+        for (AssetMetadataOccurrence occurrence : occurrences) {
+            AssetMetadataCatalog catalog = occurrence != null ? catalogs.get(occurrence.getCatalogId()) : null;
+            keys.add(buildAssetGroupKey(occurrence, catalog));
+        }
+        return keys.size();
+    }
+
+    private String buildAssetGroupKey(AssetMetadataOccurrence occurrence, AssetMetadataCatalog catalog) {
+        String sectionAnchor = normalizeLower(firstNonBlank(
+                occurrence != null ? occurrence.getSectionPath() : null,
+                occurrence != null ? occurrence.getSectionUri() : null));
+        String imageIdentity = firstNonBlank(
+                imageIdentityFromPath(catalog != null ? catalog.getInteractivePath() : null),
+                imageIdentityFromPath(catalog != null ? catalog.getPreviewUri() : null));
+        if (sectionAnchor != null && imageIdentity != null) {
+            return sectionAnchor + "::" + imageIdentity;
+        }
+        String nodeAnchor = normalizeLower(occurrence != null ? occurrence.getAssetNodePath() : null);
+        if (nodeAnchor != null) {
+            return nodeAnchor;
+        }
+        if (imageIdentity != null) {
+            return imageIdentity;
+        }
+        String assetAnchor = normalizeLower(catalog != null ? catalog.getAssetKey() : null);
+        if (sectionAnchor != null && assetAnchor != null) {
+            return sectionAnchor + "::" + assetAnchor;
+        }
+        return occurrence != null && occurrence.getId() != null ? occurrence.getId().toString() : UUID.randomUUID().toString();
+    }
+
+    private String imageIdentityFromPath(String path) {
+        String normalized = normalizeText(path);
+        if (normalized == null) {
+            return null;
+        }
+        String lower = normalized.toLowerCase(Locale.ROOT);
+        lower = lower.replaceFirst("^https?://[^/]+", "");
+        int queryIdx = lower.indexOf('?');
+        if (queryIdx >= 0) {
+            lower = lower.substring(0, queryIdx);
+        }
+        lower = lower.replaceAll("/(small|medium|large)/", "/");
+        lower = lower.replaceAll("/{2,}", "/");
+        int lastSlash = lower.lastIndexOf('/');
+        if (lastSlash < 0) {
+            return lower;
+        }
+        String dir = lower.substring(0, lastSlash + 1);
+        String file = lower.substring(lastSlash + 1);
+        int dot = file.lastIndexOf('.');
+        String ext = dot >= 0 ? file.substring(dot) : "";
+        String stem = dot >= 0 ? file.substring(0, dot) : file;
+        stem = stem.replaceAll("_2x$", "");
+        stem = stem.replaceAll("_[a-f0-9]{7,}$", "");
+        return dir + stem + ext;
+    }
+
+    private String normalizeLower(String value) {
+        String normalized = normalizeText(value);
+        return normalized == null ? null : normalized.toLowerCase(Locale.ROOT);
+    }
+
+    private boolean matchesSitePath(String requestedSite,
+            AssetMetadataOccurrence occurrence,
+            AssetMetadataCatalog catalog) {
+        if (requestedSite == null || requestedSite.isBlank()) {
+            return true;
+        }
+        String marker = "/" + requestedSite + "/";
+        return containsSiteMarker(occurrence != null ? occurrence.getSectionPath() : null, marker)
+                || containsSiteMarker(occurrence != null ? occurrence.getSectionUri() : null, marker)
+                || containsSiteMarker(occurrence != null ? occurrence.getSourceUri() : null, marker)
+                || containsSiteMarker(catalog != null ? catalog.getInteractivePath() : null, marker)
+                || containsSiteMarker(catalog != null ? catalog.getPreviewUri() : null, marker);
+    }
+
+    private boolean matchesPageContext(String requestedPageContext,
+            AssetMetadataOccurrence occurrence,
+            AssetMetadataCatalog catalog) {
+        if (requestedPageContext == null || requestedPageContext.isBlank()) {
+            return true;
+        }
+        String resolved = deriveSiteAndPageContext(
+                occurrence != null ? occurrence.getSite() : null,
+                occurrence != null ? occurrence.getSectionPath() : null,
+                occurrence != null ? occurrence.getSectionUri() : null,
+                occurrence != null ? occurrence.getSourceUri() : null,
+                catalog != null ? catalog.getInteractivePath() : null,
+                catalog != null ? catalog.getPreviewUri() : null).pageContext();
+        return requestedPageContext.equalsIgnoreCase(resolved);
+    }
+
+    private boolean containsSiteMarker(String value, String marker) {
+        if (value == null || marker == null) {
+            return false;
+        }
+        return value.toLowerCase(Locale.ROOT).contains(marker);
+    }
+
+    private SitePageContext deriveSiteAndPageContext(String explicitSite,
+            String sectionPath,
+            String sectionUri,
+            String sourceUri,
+            String interactivePath,
+            String previewUri) {
+        String canonicalSite = firstNonBlank(
+                normalizeSiteBucket(explicitSite),
+                inferSite(sectionPath),
+                inferSite(sectionUri),
+                inferSite(sourceUri),
+                inferSite(interactivePath),
+                inferSite(previewUri));
+
+        String pageContext = firstNonBlank(
+                inferPageContext(sectionPath),
+                inferPageContext(sectionUri),
+                inferPageContext(sourceUri),
+                inferPageContext(interactivePath),
+                inferPageContext(previewUri),
+                "overview");
+        return new SitePageContext(canonicalSite, pageContext);
     }
 
     /**
@@ -473,14 +679,22 @@ public class AssetImageStoreService {
      */
     @Transactional(readOnly = true)
     public Optional<AssetFinderAssetDetailDto> getDetails(UUID id) {
-        return occurrenceRepository.findById(id).flatMap(occurrence ->
-                catalogRepository.findById(occurrence.getCatalogId()).map(catalog -> {
+        return occurrenceRepository.findById(id)
+                .flatMap(occurrence -> catalogRepository.findById(occurrence.getCatalogId()).map(catalog -> {
+                    SitePageContext siteAndPage = deriveSiteAndPageContext(
+                            occurrence.getSite(),
+                            occurrence.getSectionPath(),
+                            occurrence.getSectionUri(),
+                            occurrence.getSourceUri(),
+                            catalog.getInteractivePath(),
+                            catalog.getPreviewUri());
                     AssetFinderAssetDetailDto detail = new AssetFinderAssetDetailDto();
                     detail.setId(occurrence.getId());
                     detail.setTenant(occurrence.getTenant());
                     detail.setEnvironment(occurrence.getEnvironment());
                     detail.setProject(occurrence.getProject());
-                    detail.setSite(occurrence.getSite());
+                    detail.setSite(siteAndPage.site());
+                    detail.setPageContext(siteAndPage.pageContext());
                     detail.setGeo(occurrence.getGeo());
                     detail.setLocale(occurrence.getLocale());
                     detail.setAssetKey(catalog.getAssetKey());
@@ -495,8 +709,7 @@ public class AssetImageStoreService {
                     detail.setViewports(parseJsonObject(catalog.getViewportsJson()));
                     detail.setMetadata(parseJsonObject(catalog.getAssetMetadataJson()));
                     return detail;
-                })
-        );
+                }));
     }
 
     /**
@@ -615,10 +828,10 @@ public class AssetImageStoreService {
      * Builds an audit event row for occurrence inserts/updates/deletes.
      */
     private AssetMetadataOccurrenceAudit buildAuditRow(RawDataStore rawDataStore,
-                                                       String slotKey,
-                                                       String eventType,
-                                                       AssetMetadataOccurrence oldRow,
-                                                       AssetMetadataOccurrence newRow) {
+            String slotKey,
+            String eventType,
+            AssetMetadataOccurrence oldRow,
+            AssetMetadataOccurrence newRow) {
         AssetMetadataOccurrenceAudit audit = new AssetMetadataOccurrenceAudit();
         audit.setRawDataId(rawDataStore.getId());
         audit.setSourceUri(firstNonBlank(rawDataStore.getSourceUri(), "unknown-source"));
@@ -659,10 +872,10 @@ public class AssetImageStoreService {
      * Extracts all image-like nodes from a JSON payload.
      */
     private List<ExtractedAssetCandidate> extractAssets(JsonNode rootNode,
-                                                        RawDataStore rawDataStore,
-                                                        UploadRequestMetadata requestMetadata) {
+            RawDataStore rawDataStore,
+            UploadRequestMetadata requestMetadata) {
         List<ExtractedAssetCandidate> results = new ArrayList<>();
-        collectAssets(rootNode, "#", new SectionContext(null, null), rawDataStore, requestMetadata, results);
+        collectAssets(rootNode, "#", new SectionContext(null, null), rawDataStore, requestMetadata, results, rootNode);
         return results;
     }
 
@@ -670,11 +883,12 @@ public class AssetImageStoreService {
      * Recursively traverses JSON nodes and collects image assets.
      */
     private void collectAssets(JsonNode node,
-                               String jsonPath,
-                               SectionContext currentSection,
-                               RawDataStore rawDataStore,
-                               UploadRequestMetadata requestMetadata,
-                               List<ExtractedAssetCandidate> output) {
+            String jsonPath,
+            SectionContext currentSection,
+            RawDataStore rawDataStore,
+            UploadRequestMetadata requestMetadata,
+            List<ExtractedAssetCandidate> output,
+            JsonNode rootNode) {
         if (node == null || node.isNull()) {
             return;
         }
@@ -688,17 +902,25 @@ public class AssetImageStoreService {
                 String childJsonPath = jsonPath + "/" + escapeJsonPathSegment(key);
 
                 if (value.isObject()) {
-                    if (isImageLikeKey(key) && isLikelyAssetNode(value)) {
+                    if ((isImageLikeKey(key) || isAssetModel(value)) && isLikelyAssetNode(value)) {
                         ExtractedAssetCandidate candidate = buildCandidate(
-                                key, value, childJsonPath, sectionContext, rawDataStore, requestMetadata
-                        );
+                                key, value, childJsonPath, sectionContext, rawDataStore, requestMetadata, rootNode);
                         if (candidate != null) {
                             output.add(candidate);
                         }
                     }
-                    collectAssets(value, childJsonPath, sectionContext, rawDataStore, requestMetadata, output);
+                    collectAssets(value, childJsonPath, sectionContext, rawDataStore, requestMetadata, output, rootNode);
                 } else if (value.isArray()) {
-                    collectAssets(value, childJsonPath, sectionContext, rawDataStore, requestMetadata, output);
+                    collectAssets(value, childJsonPath, sectionContext, rawDataStore, requestMetadata, output, rootNode);
+                } else if (value.isTextual() && isImageLikeKey(key)) {
+                    String path = value.asText();
+                    if (path.startsWith("/content/dam/") || path.startsWith("http") || path.startsWith("/")) {
+                         ExtractedAssetCandidate candidate = buildTextualCandidate(
+                                key, path, childJsonPath, sectionContext, requestMetadata, rawDataStore);
+                         if (candidate != null) {
+                             output.add(candidate);
+                         }
+                    }
                 }
             });
             return;
@@ -706,31 +928,52 @@ public class AssetImageStoreService {
 
         if (node.isArray()) {
             for (int i = 0; i < node.size(); i++) {
-                collectAssets(node.get(i), jsonPath + "/" + i, currentSection, rawDataStore, requestMetadata, output);
+                collectAssets(node.get(i), jsonPath + "/" + i, currentSection, rawDataStore, requestMetadata, output, rootNode);
             }
         }
     }
 
     /**
      * Builds an extracted candidate from a discovered asset node.
+     * When the assetNode's `_path` is a JSON Pointer (starts with '#'), it is resolved
+     * against the document root to find the actual referenced image node.
      */
     private ExtractedAssetCandidate buildCandidate(String assetKey,
-                                                   JsonNode assetNode,
-                                                   String jsonPath,
-                                                   SectionContext sectionContext,
-                                                   RawDataStore rawDataStore,
-                                                   UploadRequestMetadata requestMetadata) {
+            JsonNode assetNode,
+            String jsonPath,
+            SectionContext sectionContext,
+            RawDataStore rawDataStore,
+            UploadRequestMetadata requestMetadata,
+            JsonNode documentRoot) {
         String assetNodePath = firstNonBlank(textValue(assetNode.get("_path")), jsonPath);
-        String previewUri = resolvePreviewUri(assetNode);
-        String interactivePath = firstNonBlank(previewUri, resolveUriFromNode(assetNode));
+
+        // Resolve JSON Pointer references: '#/content/73/icon' -> look up that path in the document root
+        JsonNode effectiveNode = assetNode;
+        if (assetNodePath != null && assetNodePath.startsWith("#/") && documentRoot != null) {
+            try {
+                String pointer = assetNodePath.substring(1); // strip leading '#', keep leading '/'
+                JsonNode resolved = documentRoot.at(com.fasterxml.jackson.core.JsonPointer.compile(pointer));
+                if (resolved != null && !resolved.isMissingNode() && !resolved.isNull() && resolved.isObject()) {
+                    effectiveNode = resolved;
+                    logger.debug("Resolved JSON Pointer '{}' to node with keys: {}", assetNodePath,
+                            resolved.fieldNames().next());
+                }
+            } catch (Exception e) {
+                logger.debug("Could not resolve JSON Pointer '{}': {}", assetNodePath, e.getMessage());
+            }
+        }
+
+        String previewUri = resolvePreviewUri(effectiveNode);
+        String interactivePath = firstNonBlank(previewUri, resolveUriFromNode(effectiveNode));
         String publicInteractivePath = toApplePublicUrl(interactivePath);
-        String altText = extractCopyField(assetNode.get("alt"));
-        String accessibilityText = extractCopyField(assetNode.get("accessibilityText"));
+        String altText = firstNonBlank(extractCopyField(effectiveNode.get("alt")), extractCopyField(assetNode.get("alt")));
+        String accessibilityText = firstNonBlank(extractCopyField(effectiveNode.get("accessibilityText")),
+                extractCopyField(assetNode.get("accessibilityText")));
 
         Map<String, Object> viewportMap = extractViewportMap(assetNode);
         Map<String, Object> metadataMap = objectMapper.convertValue(
-                assetNode, new TypeReference<Map<String, Object>>() {}
-        );
+                assetNode, new TypeReference<Map<String, Object>>() {
+                });
         // Path belongs to occurrence context; remove from canonical catalog payload.
         Map<String, Object> canonicalCatalogMetadata = new LinkedHashMap<>(metadataMap);
         canonicalCatalogMetadata.remove("_path");
@@ -740,14 +983,12 @@ public class AssetImageStoreService {
                 assetNodePath,
                 publicInteractivePath,
                 sectionContext.path(),
-                rawDataStore.getSourceUri()
-        );
+                rawDataStore.getSourceUri());
         if (resolved.locale() == null) {
             resolved = new ResolvedMetadata(
                     resolved.tenant(), resolved.environment(), resolved.project(), resolved.site(),
                     firstNonBlank(resolved.geo(), defaultGeo),
-                    firstNonBlank(resolved.locale(), normalizeLocale(defaultLocale))
-            );
+                    firstNonBlank(resolved.locale(), normalizeLocale(defaultLocale)));
         }
 
         String metadataJson = serializeJson(canonicalCatalogMetadata);
@@ -759,16 +1000,24 @@ public class AssetImageStoreService {
                 Optional.ofNullable(altText).orElse(""),
                 Optional.ofNullable(accessibilityText).orElse(""),
                 Optional.ofNullable(viewportsJson).orElse(""),
-                Optional.ofNullable(metadataJson).orElse("")
-        ));
+                Optional.ofNullable(metadataJson).orElse("")));
         String slotKey = hashString(String.join("|",
                 Optional.ofNullable(assetKey).orElse(""),
                 Optional.ofNullable(assetNodePath).orElse(""),
                 Optional.ofNullable(sectionContext.path()).orElse(""),
-                Optional.ofNullable(sectionContext.uri()).orElse("")
-        ));
+                Optional.ofNullable(sectionContext.uri()).orElse("")));
 
-        String requestMetadataJson = serializeJson(requestMetadata != null ? requestMetadata.toMap() : Map.of());
+        SitePageContext siteAndPage = deriveSiteAndPageContext(
+                resolved.site(),
+                sectionContext.path(),
+                sectionContext.uri(),
+                rawDataStore.getSourceUri(),
+                publicInteractivePath,
+                previewUri);
+        String requestMetadataJson = buildRequestMetadataJson(
+                requestMetadata,
+                siteAndPage.site(),
+                siteAndPage.pageContext());
 
         return new ExtractedAssetCandidate(
                 rawDataStore.getSourceUri(),
@@ -792,8 +1041,7 @@ public class AssetImageStoreService {
                 resolved.site(),
                 resolved.geo(),
                 resolved.locale(),
-                requestMetadataJson
-        );
+                requestMetadataJson);
     }
 
     /**
@@ -805,7 +1053,8 @@ public class AssetImageStoreService {
         }
         Map<String, ExtractedAssetCandidate> deduped = new LinkedHashMap<>();
         for (ExtractedAssetCandidate candidate : extracted) {
-            if (candidate == null) continue;
+            if (candidate == null)
+                continue;
             deduped.putIfAbsent(candidate.assetSlotKey(), candidate);
         }
         return new ArrayList<>(deduped.values());
@@ -837,8 +1086,7 @@ public class AssetImageStoreService {
                     requestLocale,
                     "Uploaded locale " + requestLocale,
                     toStorefrontPathFromLocale(requestLocale),
-                    rawDataId
-            ));
+                    rawDataId));
         }
         Map<String, AssetRegionLocaleService.RegionLocaleObservation> deduped = new LinkedHashMap<>();
         for (ExtractedAssetCandidate candidate : candidates) {
@@ -865,9 +1113,7 @@ public class AssetImageStoreService {
                             locale,
                             "Uploaded locale " + locale,
                             toStorefrontPathFromLocale(locale),
-                            rawDataId
-                    )
-            );
+                            rawDataId));
         }
         if (requestGeo != null && requestLocale != null) {
             String key = requestGeo + "|" + requestLocale;
@@ -878,9 +1124,7 @@ public class AssetImageStoreService {
                             requestLocale,
                             "Uploaded locale " + requestLocale,
                             toStorefrontPathFromLocale(requestLocale),
-                            rawDataId
-                    )
-            );
+                            rawDataId));
         }
         if (deduped.isEmpty() && requestGeo != null && requestLocale != null) {
             return List.of(new AssetRegionLocaleService.RegionLocaleObservation(
@@ -888,8 +1132,7 @@ public class AssetImageStoreService {
                     requestLocale,
                     "Uploaded locale " + requestLocale,
                     toStorefrontPathFromLocale(requestLocale),
-                    rawDataId
-            ));
+                    rawDataId));
         }
         return new ArrayList<>(deduped.values());
     }
@@ -962,7 +1205,47 @@ public class AssetImageStoreService {
         String lower = key.toLowerCase(Locale.ROOT);
         return lower.contains("image")
                 || lower.contains("icon")
-                || lower.contains("thumbnail");
+                || lower.contains("thumbnail")
+                || lower.contains("figure")
+                || lower.contains("picture")
+                || lower.contains("img")
+                || lower.contains("media")
+                || lower.contains("asset")
+                || lower.contains("photo")
+                || lower.contains("banner")
+                || lower.contains("poster")
+                || lower.contains("avatar")
+                || lower.contains("logo")
+                || lower.contains("cover")
+                || lower.contains("hero")
+                || lower.contains("graphic")
+                || lower.contains("glyph")
+                || lower.contains("artwork")
+                || lower.contains("badge")
+                || lower.contains("symbol")
+                || lower.contains("illustration")
+                || lower.contains("background");
+    }
+ 
+    /**
+     * Determines whether a node's _model suggests it is an image or icon.
+     */
+    private boolean isAssetModel(JsonNode node) {
+        if (node == null || !node.isObject()) {
+            return false;
+        }
+        String model = textValue(node.get("_model"));
+        if (model == null) {
+            return false;
+        }
+        String lower = model.toLowerCase(Locale.ROOT);
+        return lower.contains("image")
+                || lower.contains("icon")
+                || lower.contains("graphic")
+                || lower.contains("media")
+                || lower.contains("illustration")
+                || lower.contains("photo")
+                || lower.contains("picture");
     }
 
     /**
@@ -1001,7 +1284,8 @@ public class AssetImageStoreService {
             JsonNode value = entry.getValue();
             String lower = key.toLowerCase(Locale.ROOT);
             if (value.isObject() && lower.startsWith("viewport")) {
-                viewports.put(key, objectMapper.convertValue(value, new TypeReference<Map<String, Object>>() {}));
+                viewports.put(key, objectMapper.convertValue(value, new TypeReference<Map<String, Object>>() {
+                }));
             }
         });
 
@@ -1056,7 +1340,8 @@ public class AssetImageStoreService {
         if (node == null || node.isNull() || !node.isObject()) {
             return null;
         }
-        for (String key : List.of("uri", "uri1x", "uri2x", "_uri_path", "_uri1x_path", "_uri2x_path")) {
+        for (String key : List.of("uri", "uri1x", "uri2x", "_uri_path", "_uri1x_path", "_uri2x_path", "src", "url",
+                "_path")) {
             String value = textValue(node.get(key));
             if (value != null) {
                 return value;
@@ -1119,10 +1404,10 @@ public class AssetImageStoreService {
      * Resolves effective metadata, preferring request metadata then safe inference.
      */
     private ResolvedMetadata resolveMetadata(UploadRequestMetadata requestMetadata,
-                                             String assetNodePath,
-                                             String interactivePath,
-                                             String sectionPath,
-                                             String sourceUri) {
+            String assetNodePath,
+            String interactivePath,
+            String sectionPath,
+            String sourceUri) {
         String requestLocale = requestMetadata != null ? normalizeLocale(requestMetadata.locale()) : null;
         String locale = firstNonBlank(
                 requestLocale,
@@ -1130,36 +1415,31 @@ public class AssetImageStoreService {
                 inferLocale(assetNodePath),
                 inferLocale(interactivePath),
                 inferLocale(sourceUri),
-                normalizeLocale(defaultLocale)
-        );
+                normalizeLocale(defaultLocale));
         String geo = firstNonBlank(
                 requestMetadata != null ? normalizeGeo(requestMetadata.geo()) : null,
                 geoFromLocale(locale),
-                normalizeGeo(defaultGeo)
-        );
+                normalizeGeo(defaultGeo));
         String site = firstNonBlank(
                 requestMetadata != null ? normalizeText(requestMetadata.site()) : null,
                 inferSite(sectionPath),
                 inferSite(assetNodePath),
                 inferSite(sourceUri),
                 inferSite(interactivePath),
-                normalizeText(defaultSite)
-        );
+                normalizeText(defaultSite));
+        site = normalizeSiteBucket(site);
         String tenant = firstNonBlank(
                 requestMetadata != null ? normalizeText(requestMetadata.tenant()) : null,
                 inferTenant(sectionPath),
                 inferTenant(assetNodePath),
                 inferTenant(sourceUri),
-                normalizeText(defaultTenant)
-        );
+                normalizeText(defaultTenant));
         String environment = firstNonBlank(
                 requestMetadata != null ? normalizeText(requestMetadata.environment()) : null,
-                normalizeText(defaultEnvironment)
-        );
+                normalizeText(defaultEnvironment));
         String project = firstNonBlank(
                 requestMetadata != null ? normalizeText(requestMetadata.project()) : null,
-                normalizeText(defaultProject)
-        );
+                normalizeText(defaultProject));
         return new ResolvedMetadata(tenant, environment, project, site, geo, locale);
     }
 
@@ -1171,10 +1451,12 @@ public class AssetImageStoreService {
             return UploadRequestMetadata.of(null, null, null, null, null, null);
         }
         try {
-            Map<String, Object> map = objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
+            Map<String, Object> map = objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {
+            });
             return UploadRequestMetadata.fromMap(map);
         } catch (Exception e) {
-            logger.debug("Unable to parse source_request_metadata. Continuing with inferred values. Reason: {}", e.getMessage());
+            logger.debug("Unable to parse source_request_metadata. Continuing with inferred values. Reason: {}",
+                    e.getMessage());
             return UploadRequestMetadata.of(null, null, null, null, null, null);
         }
     }
@@ -1184,11 +1466,20 @@ public class AssetImageStoreService {
      */
     private AssetFinderTileDto toTileDto(AssetMetadataOccurrence occurrence, AssetMetadataCatalog catalog) {
         AssetFinderTileDto tile = new AssetFinderTileDto();
+        SitePageContext siteAndPage = deriveSiteAndPageContext(
+                occurrence.getSite(),
+                occurrence.getSectionPath(),
+                occurrence.getSectionUri(),
+                occurrence.getSourceUri(),
+                catalog != null ? catalog.getInteractivePath() : null,
+                catalog != null ? catalog.getPreviewUri() : null);
         tile.setId(occurrence.getId());
         tile.setSectionPath(occurrence.getSectionPath());
         tile.setSectionUri(occurrence.getSectionUri());
+        tile.setAssetNodePath(occurrence.getAssetNodePath());
         tile.setLocale(occurrence.getLocale());
-        tile.setSite(occurrence.getSite());
+        tile.setSite(siteAndPage.site());
+        tile.setPageContext(siteAndPage.pageContext());
         tile.setGeo(occurrence.getGeo());
         if (catalog != null) {
             tile.setAssetKey(catalog.getAssetKey());
@@ -1208,7 +1499,8 @@ public class AssetImageStoreService {
             return Map.of();
         }
         try {
-            return objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
+            return objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {
+            });
         } catch (Exception e) {
             return Map.of();
         }
@@ -1228,6 +1520,24 @@ public class AssetImageStoreService {
         }
     }
 
+    private String buildRequestMetadataJson(UploadRequestMetadata requestMetadata,
+            String site,
+            String pageContext) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        if (requestMetadata != null) {
+            payload.putAll(requestMetadata.toMap());
+        }
+        String siteBucket = normalizeSiteBucket(site);
+        if (siteBucket != null) {
+            payload.put("site", siteBucket);
+        }
+        String normalizedPageContext = normalizePageContext(pageContext);
+        if (normalizedPageContext != null) {
+            payload.put("pageContext", normalizedPageContext);
+        }
+        return serializeJson(payload);
+    }
+
     /**
      * Returns SHA-256 hex hash for the supplied content.
      */
@@ -1239,7 +1549,8 @@ public class AssetImageStoreService {
             StringBuilder builder = new StringBuilder(encoded.length * 2);
             for (byte b : encoded) {
                 String hex = Integer.toHexString(0xff & b);
-                if (hex.length() == 1) builder.append('0');
+                if (hex.length() == 1)
+                    builder.append('0');
                 builder.append(hex);
             }
             return builder.toString();
@@ -1285,13 +1596,43 @@ public class AssetImageStoreService {
         if (path == null) {
             return null;
         }
+        Matcher publicMatcher = SITE_FROM_PUBLIC_PATH.matcher(path);
+        if (publicMatcher.find()) {
+            return normalizeSiteBucket(publicMatcher.group(1));
+        }
         Matcher assetsMatcher = SITE_FROM_ASSET_PATH.matcher(path);
         if (assetsMatcher.find()) {
-            return normalizeText(assetsMatcher.group(1));
+            return normalizeSiteBucket(assetsMatcher.group(1));
         }
         Matcher contentMatcher = SITE_FROM_CONTENT_PATH.matcher(path);
         if (contentMatcher.find()) {
-            return normalizeText(contentMatcher.group(1));
+            return normalizeSiteBucket(contentMatcher.group(1));
+        }
+        return null;
+    }
+
+    /**
+     * Infers a subpage context (specs/overview/compare) from known paths.
+     */
+    private String inferPageContext(String path) {
+        String normalized = normalizePathOnly(path);
+        if (normalized == null) {
+            return null;
+        }
+        Matcher publicMatcher = SITE_FROM_PUBLIC_PATH.matcher(normalized);
+        if (publicMatcher.find()) {
+            String directContext = normalizePageContext(publicMatcher.group(2));
+            if (directContext != null) {
+                return directContext;
+            }
+        }
+
+        for (String token : PAGE_CONTEXT_TOKENS) {
+            if (normalized.contains("/" + token + "/")
+                    || normalized.endsWith("/" + token)
+                    || normalized.equals(token)) {
+                return token;
+            }
         }
         return null;
     }
@@ -1357,7 +1698,8 @@ public class AssetImageStoreService {
     /**
      * Normalizes raw geo/locale maps into configured business geo groups.
      */
-    private AssetRegionLocaleService.RegionOptionsSnapshot buildGeoGroupedSnapshot(Map<String, ? extends java.util.Collection<String>> rawGeoToLocales) {
+    private AssetRegionLocaleService.RegionOptionsSnapshot buildGeoGroupedSnapshot(
+            Map<String, ? extends java.util.Collection<String>> rawGeoToLocales) {
         if (rawGeoToLocales == null || rawGeoToLocales.isEmpty()) {
             return new AssetRegionLocaleService.RegionOptionsSnapshot(List.of(), Map.of());
         }
@@ -1399,8 +1741,7 @@ public class AssetImageStoreService {
         }
         return new AssetRegionLocaleService.RegionOptionsSnapshot(
                 List.copyOf(geos),
-                Map.copyOf(geoToLocales)
-        );
+                Map.copyOf(geoToLocales));
     }
 
     /**
@@ -1461,14 +1802,22 @@ public class AssetImageStoreService {
         if (country == null) {
             return "WW";
         }
-        if ("IN".equals(country)) return "IN";
-        if ("JP".equals(country)) return "JP";
-        if ("KR".equals(country)) return "KR";
-        if (ANZ_COUNTRIES.contains(country)) return "ANZ";
-        if (SEA_COUNTRIES.contains(country)) return "SEA";
-        if (ALAC_CA_COUNTRIES.contains(country)) return "ALAC-CA";
-        if (EUROPE_COUNTRIES.contains(country)) return "Europe";
-        if (CEMEA_COUNTRIES.contains(country)) return "CEMEA";
+        if ("IN".equals(country))
+            return "IN";
+        if ("JP".equals(country))
+            return "JP";
+        if ("KR".equals(country))
+            return "KR";
+        if (ANZ_COUNTRIES.contains(country))
+            return "ANZ";
+        if (SEA_COUNTRIES.contains(country))
+            return "SEA";
+        if (ALAC_CA_COUNTRIES.contains(country))
+            return "ALAC-CA";
+        if (EUROPE_COUNTRIES.contains(country))
+            return "Europe";
+        if (CEMEA_COUNTRIES.contains(country))
+            return "CEMEA";
         return "WW";
     }
 
@@ -1536,6 +1885,48 @@ public class AssetImageStoreService {
     private String normalizeGeo(String geo) {
         String normalized = normalizeText(geo);
         return normalized != null ? normalized.toUpperCase(Locale.ROOT) : null;
+    }
+
+    private String normalizePathOnly(String value) {
+        String normalized = normalizeText(value);
+        if (normalized == null) {
+            return null;
+        }
+        String withoutHost = normalized.replaceFirst("^https?://[^/]+", "");
+        int queryIdx = withoutHost.indexOf('?');
+        if (queryIdx >= 0) {
+            withoutHost = withoutHost.substring(0, queryIdx);
+        }
+        return withoutHost;
+    }
+
+    private String normalizePageContext(String value) {
+        String normalized = normalizeText(value);
+        if (normalized == null) {
+            return null;
+        }
+        String lower = normalized.toLowerCase(Locale.ROOT);
+        return PAGE_CONTEXT_TOKENS.contains(lower) ? lower : null;
+    }
+
+    private String normalizeSiteBucket(String value) {
+        String normalized = normalizeText(value);
+        if (normalized == null) {
+            return null;
+        }
+        String candidate = normalized.replace('\\', '/').trim();
+        while (candidate.startsWith("/")) {
+            candidate = candidate.substring(1);
+        }
+        while (candidate.endsWith("/")) {
+            candidate = candidate.substring(0, candidate.length() - 1);
+        }
+        if (candidate.isBlank()) {
+            return null;
+        }
+        int slashIdx = candidate.indexOf('/');
+        String bucket = slashIdx >= 0 ? candidate.substring(0, slashIdx) : candidate;
+        return normalizeLower(bucket);
     }
 
     /**
@@ -1606,8 +1997,7 @@ public class AssetImageStoreService {
         try {
             String reg = jdbcTemplate.queryForObject(
                     "select to_regclass('public.asset_metadata_catalog')",
-                    String.class
-            );
+                    String.class);
             catalogPresent = reg != null;
         } catch (Exception ignored) {
             catalogPresent = false;
@@ -1615,8 +2005,7 @@ public class AssetImageStoreService {
         try {
             String reg = jdbcTemplate.queryForObject(
                     "select to_regclass('public.asset_metadata_occurrence')",
-                    String.class
-            );
+                    String.class);
             occurrencePresent = reg != null;
         } catch (Exception ignored) {
             occurrencePresent = false;
@@ -1628,14 +2017,91 @@ public class AssetImageStoreService {
         return present;
     }
 
-    private record SectionContext(String path, String uri) {}
+    private record SectionContext(String path, String uri) {
+    }
 
     private record ResolvedMetadata(String tenant,
-                                    String environment,
-                                    String project,
-                                    String site,
-                                    String geo,
-                                    String locale) {}
+            String environment,
+            String project,
+            String site,
+            String geo,
+            String locale) {
+    }
+
+    private record SitePageContext(String site, String pageContext) {
+    }
+
+    private ExtractedAssetCandidate buildTextualCandidate(
+            String assetKey,
+            String url,
+            String jsonPath,
+            SectionContext sectionContext,
+            UploadRequestMetadata requestMetadata,
+            RawDataStore rawDataStore) {
+        String publicInteractivePath = toApplePublicUrl(url);
+
+        ResolvedMetadata resolved = resolveMetadata(
+                requestMetadata,
+                jsonPath,
+                publicInteractivePath,
+                sectionContext.path(),
+                rawDataStore.getSourceUri());
+
+        if (resolved.locale() == null) {
+            resolved = new ResolvedMetadata(
+                    resolved.tenant(), resolved.environment(), resolved.project(), resolved.site(),
+                    firstNonBlank(resolved.geo(), defaultGeo),
+                    firstNonBlank(resolved.locale(), normalizeLocale(defaultLocale)));
+        }
+
+        String metadataJson = "{}";
+        String viewportsJson = "{}";
+        String metadataHash = hashString(String.join("|",
+                Optional.ofNullable(assetKey).orElse(""),
+                Optional.ofNullable(publicInteractivePath).orElse(""),
+                "", "", "", "{}", "{}"));
+        String slotKey = hashString(String.join("|",
+                Optional.ofNullable(assetKey).orElse(""),
+                Optional.ofNullable(jsonPath).orElse(""),
+                Optional.ofNullable(sectionContext.path()).orElse(""),
+                Optional.ofNullable(sectionContext.uri()).orElse("")));
+
+        SitePageContext siteAndPage = deriveSiteAndPageContext(
+                resolved.site(),
+                sectionContext.path(),
+                sectionContext.uri(),
+                rawDataStore.getSourceUri(),
+                publicInteractivePath,
+                null);
+        String requestMetadataJson = buildRequestMetadataJson(
+                requestMetadata,
+                siteAndPage.site(),
+                siteAndPage.pageContext());
+
+        return new ExtractedAssetCandidate(
+                rawDataStore.getSourceUri(),
+                rawDataStore.getVersion(),
+                assetKey,
+                "image",
+                jsonPath,
+                sectionContext.path(),
+                sectionContext.uri(),
+                publicInteractivePath,
+                null,
+                null,
+                null,
+                viewportsJson,
+                metadataJson,
+                metadataHash,
+                slotKey,
+                resolved.tenant(),
+                resolved.environment(),
+                resolved.project(),
+                resolved.site(),
+                resolved.geo(),
+                resolved.locale(),
+                requestMetadataJson);
+    }
 
     private record ExtractedAssetCandidate(
             String sourceUri,
@@ -1659,6 +2125,6 @@ public class AssetImageStoreService {
             String site,
             String geo,
             String locale,
-            String requestMetadataJson
-    ) {}
+            String requestMetadataJson) {
+    }
 }

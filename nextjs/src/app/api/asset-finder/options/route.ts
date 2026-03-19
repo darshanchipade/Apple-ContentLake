@@ -6,6 +6,7 @@ type AssetFinderTile = {
   geo?: string;
   locale?: string;
   site?: string;
+  pageContext?: string;
 };
 
 type AssetFinderSearchResponse = {
@@ -17,6 +18,8 @@ type AssetFinderOptions = {
   environments: string[];
   projects: string[];
   sites: string[];
+  pageContexts: string[];
+  siteToPageContexts: Record<string, string[]>;
   geos: string[];
   geoToLocales: Record<string, string[]>;
 };
@@ -26,6 +29,8 @@ const DEFAULT_OPTIONS: AssetFinderOptions = {
   environments: ["stage", "prod", "qa"],
   projects: ["rome"],
   sites: ["ipad", "mac"],
+  pageContexts: ["overview", "specs", "compare"],
+  siteToPageContexts: {},
   geos: ["WW", "JP", "KR"],
   geoToLocales: {
     WW: ["en_US"],
@@ -83,14 +88,26 @@ const buildOptionsFromSearch = (payload: unknown): AssetFinderOptions | null => 
 
   const geoToLocales = new Map<string, Set<string>>();
   const sites = new Set<string>(DEFAULT_OPTIONS.sites);
+  const pageContexts = new Set<string>(DEFAULT_OPTIONS.pageContexts);
+  const siteToPageContexts = new Map<string, Set<string>>();
 
   for (const item of items) {
     const geo = normalizeGeo(item.geo);
     const locale = normalizeLocale(item.locale);
     const site = normalizeText(item.site)?.toLowerCase();
+    const pageContext = normalizeText(item.pageContext)?.toLowerCase();
 
     if (site) {
       sites.add(site);
+      if (pageContext) {
+        if (!siteToPageContexts.has(site)) {
+          siteToPageContexts.set(site, new Set<string>());
+        }
+        siteToPageContexts.get(site)?.add(pageContext);
+      }
+    }
+    if (pageContext) {
+      pageContexts.add(pageContext);
     }
     if (!geo || !locale) {
       continue;
@@ -110,12 +127,18 @@ const buildOptionsFromSearch = (payload: unknown): AssetFinderOptions | null => 
   for (const geo of sortedGeos) {
     normalizedGeoToLocales[geo] = Array.from(geoToLocales.get(geo) ?? []).sort();
   }
+  const normalizedSiteToPageContexts: Record<string, string[]> = {};
+  for (const [site, contexts] of siteToPageContexts.entries()) {
+    normalizedSiteToPageContexts[site] = Array.from(contexts).sort();
+  }
 
   return {
     tenants: DEFAULT_OPTIONS.tenants,
     environments: DEFAULT_OPTIONS.environments,
     projects: DEFAULT_OPTIONS.projects,
     sites: Array.from(sites).sort(),
+    pageContexts: Array.from(pageContexts).sort(),
+    siteToPageContexts: normalizedSiteToPageContexts,
     geos: sortedGeos,
     geoToLocales: normalizedGeoToLocales,
   };

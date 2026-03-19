@@ -1,7 +1,7 @@
 // Deprecated. LocalStorage has been deleted in favor of IngestionJob API Tracking.
 // Retaining types for the UI
 export type UploadStatus = "uploading" | "success" | "error";
-export type UploadSource = "Local" | "API" | "S3";
+export type UploadSource = "Local" | "API" | "S3" | "HTML";
 
 export type UploadHistoryItem = {
   id: string;

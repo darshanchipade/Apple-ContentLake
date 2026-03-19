@@ -5,6 +5,10 @@ import com.apple.springboot.model.ParsedQuery;
 import com.apple.springboot.model.RefinementChip;
 import com.apple.springboot.model.SearchRequest;
 import com.apple.springboot.model.SearchResultDto;
+import com.apple.springboot.model.SemanticSearchResponseDto;
+import com.apple.springboot.model.SemanticSectionResultDto;
+import com.apple.springboot.model.MediaItemDto;
+import com.apple.springboot.repository.AssetMetadataOccurrenceRepository;
 import com.apple.springboot.service.QueryParsingService;
 import com.apple.springboot.service.RefinementService;
 import com.apple.springboot.service.VectorSearchService;
@@ -35,6 +39,7 @@ public class SearchController {
     private final RefinementService refinementService;
     private final VectorSearchService vectorSearchService;
     private final QueryParsingService queryParsingService;
+    private final AssetMetadataOccurrenceRepository assetMetadataOccurrenceRepository;
 
     /**
      * Wires refinement, vector search, and query parsing services for API
@@ -42,10 +47,12 @@ public class SearchController {
      */
     @Autowired
     public SearchController(RefinementService refinementService, VectorSearchService vectorSearchService,
-            QueryParsingService queryParsingService) {
+            QueryParsingService queryParsingService,
+            AssetMetadataOccurrenceRepository assetMetadataOccurrenceRepository) {
         this.refinementService = refinementService;
         this.vectorSearchService = vectorSearchService;
         this.queryParsingService = queryParsingService;
+        this.assetMetadataOccurrenceRepository = assetMetadataOccurrenceRepository;
     }
 
     /**
@@ -140,6 +147,163 @@ public class SearchController {
     }
 
     /**
+     * Pure semantic search endpoint. Accepts a free-form natural language query and returns
+     * the most semantically relevant content sections with their cleansed text and associated images.
+     * No refinement chips, keyword filters, section filters, or page/role restrictions are applied.
+     */
+    @Operation(summary = "Semantic (natural language) search",
+            description = "Converts the user query to a vector embedding and finds the most relevant " +
+                    "enriched content sections. Returns cleansed text and any associated section images. " +
+                    "No refinement chips or keyword filters are applied.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Successfully retrieved semantic search results",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = SearchResultDto.class))),
+            @ApiResponse(responseCode = "500", description = "Internal server error", content = @Content)
+    })
+    @PostMapping("/semantic-search")
+    public SemanticSearchResponseDto semanticSearch(@RequestBody SearchRequest request) throws IOException {
+        if (request == null || request.getQuery() == null || request.getQuery().isBlank()) {
+            return new SemanticSearchResponseDto("", List.of());
+        }
+        String rawQuery = request.getQuery().trim();
+        log.info("Semantic search request query='{}'", clip(rawQuery));
+
+        // Enterprise-grade hybrid semantic search pipeline (dense + lexical + llm rank + pack assembly)
+        List<SemanticSectionResultDto> results = vectorSearchService.hybridSearch(rawQuery, 20);
+
+        // Collect unique section paths (the parent containers) to look up ALL associated images for these sections
+        List<String> sectionPaths = results.stream()
+                .map(SemanticSectionResultDto::getSectionPath)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+
+        // Build a map of baseComponentPath -> list of MediaItemDto
+        Map<String, List<MediaItemDto>> sectionMedia = new java.util.HashMap<>();
+        Map<String, List<MediaItemDto>> pageMedia = new java.util.HashMap<>();
+        if (!sectionPaths.isEmpty()) {
+            try {
+                // Strategy 1: Match by sectionPath (precise — works for JSON API content)
+                List<Object[]> imageRows = assetMetadataOccurrenceRepository.findImageUrlsWithUrisBySectionPaths(sectionPaths);
+
+                // Strategy 2: Match by sourceUri (page URL) — fallback for HTML content sections.
+                // IMPORTANT: asset_metadata_occurrence.source_uri stores the raw sourceUri from
+                // rawDataStore (e.g. 'html-extraction:https://...'), while consolidated_enriched_sections
+                // also stores it with the prefix. We query with BOTH forms (prefixed and stripped) to
+                // match regardless of which format was ingested.
+                List<String> sourceUris = new java.util.ArrayList<>();
+                results.stream()
+                        .map(SemanticSectionResultDto::getSourceUrl)
+                        .filter(java.util.Objects::nonNull)
+                        .distinct()
+                        .forEach(rawUri -> {
+                            sourceUris.add(rawUri); // always include as-is
+                            // Also add the stripped version if it has a scheme prefix
+                            int colonIdx = rawUri.indexOf(':');
+                            if (colonIdx > 0 && !rawUri.startsWith("http")) {
+                                String rest = rawUri.substring(colonIdx + 1);
+                                if (rest.startsWith("http") && !sourceUris.contains(rest)) {
+                                    sourceUris.add(rest);
+                                }
+                            }
+                        });
+                if (!sourceUris.isEmpty()) {
+                    List<Object[]> sourceUriRows = assetMetadataOccurrenceRepository.findImageUrlsWithUrisBySourceUris(sourceUris);
+                    // Merge the two result sets; deduplicate by URL
+                    java.util.Set<String> seenUrls = imageRows.stream()
+                            .map(r -> r[4] != null ? r[4].toString() : null)
+                            .filter(java.util.Objects::nonNull)
+                            .collect(Collectors.toSet());
+                    for (Object[] row : sourceUriRows) {
+                        String url = row[4] != null ? row[4].toString() : null;
+                        if (url != null && seenUrls.add(url)) {
+                            imageRows = new java.util.ArrayList<>(imageRows);
+                            imageRows.add(row);
+                        }
+                    }
+                }
+
+                for (Object[] row : imageRows) {
+                    String imageSectionUri = row[1] != null ? row[1].toString() : null;
+                    String type = row[2] != null ? row[2].toString() : "image";
+                    String label = row[3] != null ? row[3].toString() : "";
+                    String url = row[4] != null ? normalizeMediaUrl(row[4].toString()) : null;
+
+                    if (imageSectionUri != null && url != null) {
+                        // Compute base component path for this image to match the text blocks
+                        String baseComponentPath = VectorSearchService.getBaseComponentPath(imageSectionUri);
+                        sectionMedia.computeIfAbsent(baseComponentPath, k -> new java.util.ArrayList<>())
+                                .add(new MediaItemDto(type, label, url));
+                    }
+                }
+
+                // Build page-level media fallback map keyed by source URI.
+                // HTML-extracted sections store images by their slot path (e.g. html-content-section[0]/hero/...)
+                // which rarely matches the text section's slot path. Bucketing by page URL allows any
+                // image from the same page to appear on any section result card as a fallback.
+                pageMedia = new java.util.HashMap<>();
+                if (!sourceUris.isEmpty()) {
+                    List<Object[]> s2Rows = assetMetadataOccurrenceRepository.findImageUrlsWithUrisBySourceUris(sourceUris);
+                    for (Object[] row : s2Rows) {
+                        String srcUri = row[0] != null ? row[0].toString() : null;
+                        String type   = row[2] != null ? row[2].toString() : "image";
+                        String label  = row[3] != null ? row[3].toString() : "";
+                        String url    = row[4] != null ? normalizeMediaUrl(row[4].toString()) : null;
+                        if (srcUri != null && url != null) {
+                            pageMedia.computeIfAbsent(srcUri, k -> new java.util.ArrayList<>())
+                                     .add(new MediaItemDto(type, label, url));
+                            // Also add under stripped form (without "html-extraction:" prefix)
+                            int col = srcUri.indexOf(':');
+                            if (col > 0 && !srcUri.startsWith("http")) {
+                                String stripped = srcUri.substring(col + 1);
+                                pageMedia.computeIfAbsent(stripped, k -> new java.util.ArrayList<>())
+                                         .add(new MediaItemDto(type, label, url));
+                            }
+                        }
+                    }
+                }
+
+            } catch (Exception e) {
+                log.warn("Unable to fetch section images for semantic search. Continuing without images. Reason: {}", e.getMessage());
+            }
+        }
+
+
+        for (SemanticSectionResultDto result : results) {
+            String uri = result.getSectionUri();
+            // Primary: exact slot-path match (works for AEM JSON content)
+            List<MediaItemDto> media = sectionMedia.get(uri);
+            // Fallback: for HTML semantic sections with no direct image match,
+            // show the best images from anywhere on the same page.
+            if ((media == null || media.isEmpty()) && uri != null && uri.contains("html-content-section")) {
+                String pageUrl = result.getSourceUrl();
+                if (pageUrl != null) {
+                    media = pageMedia.get(pageUrl);
+                    if (media == null || media.isEmpty()) {
+                        // Try stripped form without "html-extraction:" prefix
+                        int col = pageUrl.indexOf(':');
+                        if (col > 0 && !pageUrl.startsWith("http")) {
+                            media = pageMedia.get(pageUrl.substring(col + 1));
+                        }
+                    }
+                }
+            }
+            result.setMedia(media != null ? media : List.of());
+            
+            // Clean up the UI path display for the frontend
+            String fullSectionPath = result.getSectionPath();
+            if (fullSectionPath != null && fullSectionPath.contains("/content/dam/applecom-cms/live/en_US")) {
+                fullSectionPath = fullSectionPath.replace("/content/dam/applecom-cms/live/en_US", "");
+            }
+            if (fullSectionPath == null || fullSectionPath.isBlank()) fullSectionPath = uri;
+            result.setSectionPath(fullSectionPath);
+        }
+
+        return new SemanticSearchResponseDto(rawQuery, results);
+    }
+
+    /**
      * Trims and truncates values to keep log lines readable.
      */
     private String clip(String value) {
@@ -151,6 +315,25 @@ public class SearchController {
             return normalized;
         }
         return normalized.substring(0, LOG_VALUE_LIMIT) + "...";
+    }
+
+    /**
+     * Normalizes media URLs for frontend rendering.
+     * - "/assets-www/..." -> "https://www.apple.com/assets-www/..."
+     * - "//cdn..."        -> "https://cdn..."
+     */
+    private String normalizeMediaUrl(String url) {
+        if (url == null || url.isBlank()) {
+            return url;
+        }
+        String trimmed = url.trim();
+        if (trimmed.startsWith("//")) {
+            return "https:" + trimmed;
+        }
+        if (trimmed.startsWith("/")) {
+            return "https://www.apple.com" + trimmed;
+        }
+        return trimmed;
     }
 
     /**

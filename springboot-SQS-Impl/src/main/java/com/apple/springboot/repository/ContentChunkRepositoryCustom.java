@@ -18,4 +18,17 @@ public interface ContentChunkRepositoryCustom {
             int limit,
             String sectionKeyFilter
     );
+
+    /**
+     * Finds content chunks using plain text lexical search (ILIKE match) as a fallback mechanism.
+     */
+    List<ContentChunkWithDistance> findLexicalSimilar(
+            String textQuery,
+            String original_field_name,
+            String[] tags,
+            String[] keywords,
+            Map<String, Object> contextMap,
+            int limit,
+            String sectionKeyFilter
+    );
 }

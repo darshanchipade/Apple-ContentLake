@@ -24,6 +24,19 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
         }
 
         /**
+         * Projection for deriving site/subpage options from stored paths.
+         */
+        interface SitePathProjection {
+                String getSite();
+
+                String getSourceUri();
+
+                String getSectionPath();
+
+                String getSectionUri();
+        }
+
+        /**
          * Deletes occurrence rows for a raw_data_store record.
          */
         void deleteByRawDataId(UUID rawDataId);
@@ -56,11 +69,13 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
                           and (
                                 :site is null
                                 or lower(convert_from(cast(o.site as bytea), 'UTF8')) = lower(cast(:site as text))
-                                or lower(convert_from(cast(o.section_path as bytea), 'UTF8')) like ('%/' || lower(cast(:site as text)) || '/%')
-                                or lower(convert_from(cast(o.source_uri as bytea), 'UTF8')) like ('%/' || lower(cast(:site as text)) || '/%')
                               )
                           and (:geo is null or lower(convert_from(cast(o.geo as bytea), 'UTF8')) = lower(cast(:geo as text)))
                           and (:locale is null or lower(convert_from(cast(o.locale as bytea), 'UTF8')) = lower(cast(:locale as text)))
+                          and o.catalog_id not in (
+                                select c.id from public.asset_metadata_catalog c
+                                where c.interactive_path like '%unresolved-css-sprite%'
+                          )
                         order by o.catalog_id, o.created_at desc
                         """, countQuery = """
                         select count(distinct o.catalog_id)
@@ -72,11 +87,13 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
                           and (
                                 :site is null
                                 or lower(convert_from(cast(o.site as bytea), 'UTF8')) = lower(cast(:site as text))
-                                or lower(convert_from(cast(o.section_path as bytea), 'UTF8')) like ('%/' || lower(cast(:site as text)) || '/%')
-                                or lower(convert_from(cast(o.source_uri as bytea), 'UTF8')) like ('%/' || lower(cast(:site as text)) || '/%')
                               )
                           and (:geo is null or lower(convert_from(cast(o.geo as bytea), 'UTF8')) = lower(cast(:geo as text)))
                           and (:locale is null or lower(convert_from(cast(o.locale as bytea), 'UTF8')) = lower(cast(:locale as text)))
+                          and o.catalog_id not in (
+                                select c.id from public.asset_metadata_catalog c
+                                where c.interactive_path like '%unresolved-css-sprite%'
+                          )
                         """, nativeQuery = true)
         Page<AssetMetadataOccurrence> search(
                         @Param("tenant") String tenant,
@@ -101,6 +118,20 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
         List<String> findDistinctSites();
 
         /**
+         * Loads distinct site + path tuples for deriving page-context options.
+         */
+        @Query(value = """
+                        select distinct
+                            convert_from(cast(o.site as bytea), 'UTF8') as site,
+                            convert_from(cast(o.source_uri as bytea), 'UTF8') as sourceUri,
+                            convert_from(cast(o.section_path as bytea), 'UTF8') as sectionPath,
+                            convert_from(cast(o.section_uri as bytea), 'UTF8') as sectionUri
+                        from public.asset_metadata_occurrence o
+                        where o.active = true
+                        """, nativeQuery = true)
+        List<SitePathProjection> findDistinctSitePathTuples();
+
+        /**
          * Loads distinct geo/locale pairs from current extracted asset rows.
          */
         @Query(value = """
@@ -116,4 +147,49 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
                         order by geo, locale
                         """, nativeQuery = true)
         List<GeoLocaleProjection> findDistinctGeoLocalePairs();
+
+        /**
+         * Returns image interactive paths and metadata for the given section paths (for semantic search image enrichment).
+         * Each element in the returned list is an Object[] of [sectionPath, assetModel, altText, interactivePath].
+         */
+        @Query("select o.sectionPath, c.assetModel, c.altText, c.interactivePath from AssetMetadataOccurrence o " +
+               "join AssetMetadataCatalog c on o.catalogId = c.id " +
+               "where o.sectionPath in :sectionPaths and o.active = true " +
+               "and c.interactivePath is not null and c.interactivePath not like '#%' " +
+               "and c.interactivePath not like '%unresolved-css-sprite%'")
+        List<Object[]> findImageUrlsBySectionPaths(@Param("sectionPaths") List<String> sectionPaths);
+
+        /**
+         * Returns image interactive paths and metadata for the given section URIs (for highly granular semantic search image enrichment).
+         * Each element in the returned list is an Object[] of [sectionUri, assetModel, altText, interactivePath].
+         */
+        @Query("select o.sectionUri, c.assetModel, c.altText, c.interactivePath from AssetMetadataOccurrence o " +
+               "join AssetMetadataCatalog c on o.catalogId = c.id " +
+               "where o.sectionUri in :sectionUris and o.active = true " +
+               "and c.interactivePath is not null and c.interactivePath not like '#%' " +
+               "and c.interactivePath not like '%unresolved-css-sprite%'")
+        List<Object[]> findImageUrlsBySectionUris(@Param("sectionUris") List<String> sectionUris);
+
+        /**
+         * Returns image interactive paths and metadata for the given section paths, including their sectionUris.
+         * Each element in the returned list is an Object[] of [sectionPath, sectionUri, assetModel, altText, interactivePath].
+         */
+        @Query("select o.sectionPath, o.sectionUri, c.assetModel, c.altText, c.interactivePath from AssetMetadataOccurrence o " +
+               "join AssetMetadataCatalog c on o.catalogId = c.id " +
+               "where o.sectionPath in :sectionPaths and o.active = true " +
+               "and c.interactivePath is not null and c.interactivePath not like '#%' " +
+               "and c.interactivePath not like '%unresolved-css-sprite%'")
+        List<Object[]> findImageUrlsWithUrisBySectionPaths(@Param("sectionPaths") List<String> sectionPaths);
+
+        /**
+         * Returns image interactive paths and metadata for the given source URIs (page URLs).
+         * Used as a fallback when sectionPath matching fails (e.g. HTML content sections).
+         * Each element is an Object[] of [sectionPath, sectionUri, assetModel, altText, interactivePath].
+         */
+        @Query("select o.sectionPath, o.sectionUri, c.assetModel, c.altText, c.interactivePath from AssetMetadataOccurrence o " +
+               "join AssetMetadataCatalog c on o.catalogId = c.id " +
+               "where o.sourceUri in :sourceUris and o.active = true " +
+               "and c.interactivePath is not null and c.interactivePath not like '#%' " +
+               "and c.interactivePath not like '%unresolved-css-sprite%'")
+        List<Object[]> findImageUrlsWithUrisBySourceUris(@Param("sourceUris") List<String> sourceUris);
 }

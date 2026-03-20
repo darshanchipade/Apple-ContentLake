@@ -8,6 +8,7 @@ import com.apple.springboot.model.SemanticSectionResultDto;
 import com.apple.springboot.repository.ConsolidatedEnrichedSectionRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import lombok.Getter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -114,20 +115,39 @@ public class VectorSearchService {
      * Example: hybridSearch("Capacity for iphone 17 pro", 10) returns grouped semantic result cards.
      */
     @Transactional(readOnly = true)
-    public List<SemanticSectionResultDto> hybridSearch(String query, int limit) throws IOException {
+    public List<SemanticSectionResultDto> contextAwareHybridSearch(String query, int limit) throws IOException {
         final QueryIntent intent = detectIntent(query);
         final IntentProfile intentProfile = profileForIntent(intent);
         final QueryScope queryScope = extractQueryScope(query);
         final boolean isCompareIntent = intent == QueryIntent.COMPARE;
+
+        // V8 LLM Pre-Retrieval Prediction
+        SlugPrediction prediction = predictRoutingSlug(query);
+        final String detectedSlug = (prediction.confidence() >= 0.85 && !"none".equalsIgnoreCase(prediction.slug())) ? prediction.slug() : null;
+
         // 1. Dense Retrieval (Embeddings)
         float[] queryVector = bedrockEnrichmentService.generateEmbedding(query);
-        // We fetch a larger pool (e.g., 50) of chunks for aggregation, and we'll return 'limit' sections
+        
+        // Unscoped fallback pool (Safety Net)
         List<ContentChunkWithDistance> denseHits = contentChunkRepository.findSimilar(
                 queryVector, null, null, null, null, null, 100, null);
-
-        // 2. Lexical Fallback Retrieval
         List<ContentChunkWithDistance> lexicalHits = contentChunkRepository.findLexicalSimilar(
                 query, null, null, null, null, 100, null);
+
+        // Scoped precision pool (High Confidence LLM Hits)
+        List<ContentChunkWithDistance> scopedDenseHits = List.of();
+        List<ContentChunkWithDistance> scopedLexicalHits = List.of();
+        if (detectedSlug != null) {
+            scopedDenseHits = contentChunkRepository.findSimilar(
+                    queryVector, null, null, null, null, null, 50, detectedSlug);
+            scopedLexicalHits = contentChunkRepository.findLexicalSimilar(
+                    query, null, null, null, null, 50, detectedSlug);
+        }
+        
+        // Track the scoped chunk IDs to boost their eventual assembled UI sections
+        java.util.Set<UUID> scopedChunkIds = new java.util.HashSet<>();
+        scopedDenseHits.forEach(h -> scopedChunkIds.add(h.getContentChunk().getId()));
+        scopedLexicalHits.forEach(h -> scopedChunkIds.add(h.getContentChunk().getId()));
 
         // Map section URI -> List of hitting chunks (from both dense and lexical)
         Map<String, List<ContentChunkWithDistance>> sectionHits = new HashMap<>();
@@ -168,14 +188,19 @@ public class VectorSearchService {
             }
         }
 
-        // Combine dense and lexical hits into a single map of ContentChunk (to avoid duplicates)
+        // Combine dense and lexical hits into a single map of ContentChunk (to avoid duplicates, merging scoped too)
         Map<UUID, ContentChunkWithDistance> combinedHits = new HashMap<>();
         for (ContentChunkWithDistance hit : denseHits) {
             combinedHits.put(hit.getContentChunk().getId(), hit);
         }
         for (ContentChunkWithDistance lHit : lexicalHits) {
-            // Only add if not already present from dense hits
             combinedHits.putIfAbsent(lHit.getContentChunk().getId(), new ContentChunkWithDistance(lHit.getContentChunk(), 0.45)); // Assign default distance for pure lexical
+        }
+        for (ContentChunkWithDistance hit : scopedDenseHits) {
+            combinedHits.putIfAbsent(hit.getContentChunk().getId(), hit);
+        }
+        for (ContentChunkWithDistance lHit : scopedLexicalHits) {
+            combinedHits.putIfAbsent(lHit.getContentChunk().getId(), new ContentChunkWithDistance(lHit.getContentChunk(), 0.45));
         }
 
         // 3. Section-Level Aggregation & Assembly
@@ -210,20 +235,17 @@ public class VectorSearchService {
             }
             if (excluded) continue;
 
-            String baseComponentPath = getBaseComponentPath(sectionUri);
-            baseComponentPath = canonicalGroupPath(baseComponentPath, sectionPath, sectionUri, section.getOriginalFieldName());
-            // For compare-intent queries, collapse all compare subtree fragments into one canonical group.
-            // Example:
-            //   /en_US/airpods/html-content-section[5]/compare/airPods4AdaptiveAudioFeature001
-            //   /en_US/airpods/html-content-section[5]/compare/pricingCallToAction006
-            // both map to:
-            //   /en_US/airpods/html-content-section[5]/compare
-            //while building grouped section keys, and only executes when isCompareIntent is true (query detected as compare intent). In that case, it collapses compare subtree paths to one canonical /compare root before scoring/groupin
-            if (isCompareIntent) {
-                String canonicalCompare = canonicalCompareGroupPath(baseComponentPath, sectionPath, sectionUri);
-                if (StringUtils.hasText(canonicalCompare)) {
-                    baseComponentPath = canonicalCompare;
+            String
+                    baseComponentPath = null;
+            Object facetsObj = section.getContext() != null ? section.getContext().get("facets") : null;
+            if (facetsObj instanceof java.util.Map<?, ?> facets) {
+                Object slugObj = facets.get("analyticsRegionSlug");
+                if (slugObj != null && org.springframework.util.StringUtils.hasText(slugObj.toString()) && org.springframework.util.StringUtils.hasText(section.getSourceUri())) {
+                    baseComponentPath = "slug:" + section.getSourceUri() + "|" + slugObj.toString();
                 }
+            }
+            if (baseComponentPath == null) {
+                baseComponentPath = getBaseComponentPath(sectionUri);
             }
 
             // Exclude results that resolve to hollow structural containers
@@ -305,8 +327,41 @@ public class VectorSearchService {
             // Hybrid Gate
             double hybridBonus = (vectorStrength >= 0.55 && lexicalNorm >= 0.35) ? 1.0 : 0.0;
 
-            // finalScore: vector + coverage (configurable, lower = less generic dominance) + lexical token overlap
-            double finalScore = 0.47 * vectorStrength + coverageWeight * coverage + 0.25 * lexicalNorm + 0.05 * hybridBonus;
+            // V5 Context Metadata Scoring
+            double contextBonus = 0.0;
+            if (section.getContext() != null) {
+                String queryLower = query.toLowerCase(java.util.Locale.ROOT);
+                // 1. Bedrock Tags Bonus
+                Object tagsObj = section.getContext().get("tags");
+                if (tagsObj instanceof java.util.List<?> tagsList) {
+                    for (Object tag : tagsList) {
+                        if (tag != null && queryLower.contains(tag.toString().toLowerCase(java.util.Locale.ROOT))) {
+                            contextBonus += 0.15;
+                            break; // Apply bonus once
+                        }
+                    }
+                }
+                // 2. Page Title / Facet Bonus
+                Object facetsObj = section.getContext().get("facets");
+                if (facetsObj instanceof java.util.Map<?, ?> facets) {
+                    Object titleObj = facets.get("pageTitle");
+                    if (titleObj != null && queryLower.contains(titleObj.toString().toLowerCase(java.util.Locale.ROOT))) {
+                        contextBonus += 0.10;
+                    }
+                }
+            }
+
+            // V8 Context LLM Predictor Boost
+            double llmScopedBoost = 0.0;
+            for (ContentChunkWithDistance h : hits) {
+                if (scopedChunkIds.contains(h.getContentChunk().getId())) {
+                    llmScopedBoost = 0.25;
+                    break;
+                }
+            }
+
+            // finalScore: vector + coverage + lexical token overlap + V5 context bonus + V8 LLM predictive boost
+            double finalScore = 0.47 * vectorStrength + coverageWeight * coverage + 0.25 * lexicalNorm + 0.05 * hybridBonus + contextBonus + llmScopedBoost;
             double pathAlignment = computePathAlignmentScore(
                     query,
                     baseComponentPath,
@@ -315,35 +370,30 @@ public class VectorSearchService {
                     section.getOriginalFieldName());
             finalScore += 0.18 * pathAlignment;
 
-            // Intent-aware deterministic adjustment for compare queries:
-            // - boost compare/spec/model sections
-            // - penalize analytics/a11y-only sections that often pollute compare results
             String sectionPathForIntent = section.getSectionPath();
             if (!StringUtils.hasText(sectionPathForIntent)) {
                 sectionPathForIntent = section.getSectionUri();
             }
-            String fieldNameForIntent = section.getOriginalFieldName();
-            finalScore += intentAdjustment(intentProfile, query, sectionPathForIntent, section.getOriginalFieldName());
             finalScore += queryScopeAdjustment(queryScope, sectionPathForIntent, section.getOriginalFieldName());
-            String lowerPathForIntent = sectionPathForIntent == null ? "" : sectionPathForIntent.toLowerCase(java.util.Locale.ROOT);
-            String lowerFieldForIntent = fieldNameForIntent == null ? "" : fieldNameForIntent.toLowerCase(java.util.Locale.ROOT);
-            boolean analyticsSection = lowerPathForIntent.contains("/analytics") || lowerFieldForIntent.contains("analytics");
-            if (analyticsSection) {
-                // Generic quality guardrail: analytics rows are usually telemetry/context shells,
-                // not direct answer content for end-user semantic questions.
+            
+            // Classification-based penalization (Replaces brittle /analytics regex path filtering)
+            boolean isAnalytics = "ANALYTICS".equalsIgnoreCase(section.getClassification());
+            if (!isAnalytics && section.getOriginalFieldName() != null) {
+                isAnalytics = section.getOriginalFieldName().toLowerCase(java.util.Locale.ROOT).contains("analytics");
+            }
+            if (isAnalytics) {
+                // Generic quality guardrail: analytics rows are usually telemetry/context shells.
                 finalScore -= 0.18;
             }
             if (pathAlignment < 0.20 && lexicalNorm < 0.40) {
-                // Generic guardrail: if neither textual nor structural alignment is present,
-                // avoid letting broad semantic drift dominate top ranks.
                 finalScore -= 0.10;
             }
             finalScore = Math.min(1.0, Math.max(0.0, finalScore));
 
-            logger.info("Hybrid math for section '{}': maxSim={}, meanTop3={}, vecStr={}, hitCount={}, cov={}, lex={}, pathAlign={}, bonus={}, finalScore={}",
+            logger.info("Hybrid math for section '{}': maxSim={}, meanTop3={}, vecStr={}, hitCount={}, cov={}, lex={}, ctxBonus={}, llmBoost={}, pathAlign={}, bonus={}, finalScore={}",
                     baseComponentPath, String.format("%.3f", maxSim), String.format("%.3f", meanTop3Sim), 
                     String.format("%.3f", vectorStrength), hitCount, String.format("%.3f", coverage), 
-                    lexicalNorm, String.format("%.3f", pathAlignment), hybridBonus, String.format("%.3f", finalScore));
+                    lexicalNorm, String.format("%.3f", contextBonus), String.format("%.3f", llmScopedBoost), String.format("%.3f", pathAlignment), hybridBonus, String.format("%.3f", finalScore));
 
             scoredSections.add(new SectionScore(section, finalScore, hitCount, baseComponentPath, pathAlignment));
         }
@@ -457,14 +507,32 @@ public class VectorSearchService {
         List<ConsolidatedEnrichedSection> allSections = new ArrayList<>();
         java.util.Map<UUID, ConsolidatedEnrichedSection> seen = new java.util.HashMap<>();
         for (String path : topSectionPaths) {
-            for (ConsolidatedEnrichedSection s : consolidatedEnrichedSectionRepository.findAllBySectionPathOrDescendants(path)) {
-                if (s.getId() != null && seen.putIfAbsent(s.getId(), s) == null) allSections.add(s);
+            if (path.startsWith("slug:")) {
+                String[] parts = path.substring(5).split("\\|", 2);
+                if (parts.length == 2) {
+                    for (ConsolidatedEnrichedSection s : consolidatedEnrichedSectionRepository.findAllBySourceUriAndAnalyticsRegionSlug(parts[0], parts[1])) {
+                        if (s.getId() != null && seen.putIfAbsent(s.getId(), s) == null) allSections.add(s);
+                    }
+                }
+            } else {
+                for (ConsolidatedEnrichedSection s : consolidatedEnrichedSectionRepository.findAllBySectionPathOrDescendants(path)) {
+                    if (s.getId() != null && seen.putIfAbsent(s.getId(), s) == null) allSections.add(s);
+                }
             }
         }
         Map<String, List<ConsolidatedEnrichedSection>> fragmentsByBaseComponent = allSections.stream()
                 .filter(s -> s.getSectionUri() != null)
                 .collect(Collectors.groupingBy(
-                        s -> getBaseComponentPath(s.getSectionUri()),
+                        s -> {
+                            Object facetsObj = s.getContext() != null ? s.getContext().get("facets") : null;
+                            if (facetsObj instanceof java.util.Map<?, ?> facets) {
+                                Object slugObj = facets.get("analyticsRegionSlug");
+                                if (slugObj != null && org.springframework.util.StringUtils.hasText(slugObj.toString()) && org.springframework.util.StringUtils.hasText(s.getSourceUri())) {
+                                    return "slug:" + s.getSourceUri() + "|" + slugObj.toString();
+                                }
+                            }
+                            return getBaseComponentPath(s.getSectionUri());
+                        },
                         java.util.stream.Collectors.toCollection(ArrayList::new)));
 
         // Context Window Expansion:
@@ -996,63 +1064,102 @@ public class VectorSearchService {
                     QueryIntent.COLOR,
                     true,
                     true,
-                    List.of("/finish", "finish-", "/color", "color-", "colour"),
+                    List.of("/buy", "shop", "/color"),
                     List.of("/analytics"),
-                    0.20,
-                    0.30,
-                    0.08,
-                    0.08
+                    1.1,
+                    0.2,
+                    1.0,
+                    0.9
             );
-            case GENERAL -> new IntentProfile(
+            default -> new IntentProfile(
                     QueryIntent.GENERAL,
                     false,
                     false,
                     List.of(),
-                    List.of(),
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0
+                    List.of("/analytics", "/a11y/", "-a11y"),
+                    1.0,
+                    0.1,
+                    1.0,
+                    1.0
             );
         };
+    }
+
+    private record SlugPrediction(String slug, double confidence) {}
+
+    /**
+     * GenAI execution step inside the Vector routing pipeline. 
+     * Uses LLM parsing to evaluate natural language text against AEM metadata regions.
+     */
+    private SlugPrediction predictRoutingSlug(String query) {
+        String prompt =
+                "You are a deterministic routing agent for an Apple Semantic Search system.\n" +
+
+                        "INPUT\n" +
+                        "User Query: \"" + query + "\"\n\n" +
+
+                        "OBJECTIVE\n" +
+                        "Classify the query into EXACTLY ONE analytics region slug that best represents the user's primary intent.\n\n" +
+
+                        "VALID OUTPUT CATEGORIES (STRICT)\n" +
+                        "- compare       → user is comparing products or asking 'which is better', 'difference', 'vs'\n" +
+                        "- tech-specs    → user is asking for specifications, technical details, dimensions, performance, battery, camera, chip\n" +
+                        "- color         → user is asking about colors, finishes, variants\n" +
+                        "- overview      → user is exploring general information, features, benefits, or high-level understanding\n" +
+                        "- buy           → user intent is transactional (price, purchase, deals, availability, order)\n" +
+                        "- none          → query does not clearly map to any of the above\n\n" +
+
+                        "STRICT CLASSIFICATION RULES\n" +
+                        "1. Choose ONLY ONE category.\n" +
+                        "2. Do NOT infer beyond what is explicitly stated.\n" +
+                        "3. If the query is ambiguous or weakly related, return 'none'.\n" +
+                        "4. Prioritize INTENT over keywords.\n" +
+                        "5. If multiple intents exist, choose the STRONGEST dominant intent.\n" +
+                        "6. Do NOT guess missing context (e.g., product names, regions).\n\n" +
+
+                        "DISAMBIGUATION GUIDELINES\n" +
+                        "- 'best', 'vs', 'difference' → compare\n" +
+                        "- 'specs', 'battery life', 'camera details', 'dimensions' → tech-specs\n" +
+                        "- 'colors', 'finish', 'available colors' → color\n" +
+                        "- 'features', 'what is', 'tell me about', 'overview' → overview\n" +
+                        "- 'price', 'buy', 'order', 'cost', 'discount' → buy\n\n" +
+
+                        "EDGE CASE HANDLING\n" +
+                        "- Queries like 'iPad essentials' or 'best iPad apps' → overview (not buy)\n" +
+                        "- Queries like 'iPhone battery vs Samsung' → compare\n" +
+                        "- Queries like 'iPhone 15 blue' → color\n" +
+                        "- Queries like 'iPhone specs' → tech-specs\n" +
+                        "- Queries like 'cheap iPhone deals' → buy\n\n" +
+
+                        "CONFIDENCE SCORING\n" +
+                        "- 0.9–1.0 → explicit and unambiguous intent\n" +
+                        "- 0.7–0.89 → clear but slightly inferred\n" +
+                        "- 0.5–0.69 → weak signal\n" +
+                        "- <0.5 → highly ambiguous → prefer 'none'\n\n" +
+
+                        "OUTPUT FORMAT (Return valid JSON parseable by strict parser; no trailing commas)\n" +
+                        "{ \"slug\": \"<compare|tech-specs|color|overview|buy|none>\", \"confidence\": <0.0-1.0> }\n\n" +
+
+                        "NO explanation. NO extra text.";
+        try {
+            String jsonRaw = bedrockEnrichmentService.invokeChatForText(prompt, 128);
+            com.fasterxml.jackson.databind.JsonNode root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(jsonRaw);
+            String slug = root.path("slug").asText("none");
+            double conf = root.path("confidence").asDouble(0.0);
+            
+            logger.info("LLM Routing Prediction for query [{}]: slug='{}', confidence={}", query, slug, conf);
+            
+            return new SlugPrediction(slug, conf);
+        } catch (Exception e) {
+            logger.warn("LLM Pre-Routing Retrieval Failed. Defaulting to unscoped fallback vector pool. Reason: {}", e.getMessage());
+            return new SlugPrediction("none", 0.0);
+        }
     }
 
     /**
      * Computes additive score delta from intent profile and section metadata.
      * Example: compare path with "/compare" gets positive boost in COMPARE intent.
      */
-    private double intentAdjustment(IntentProfile profile, String query, String sectionPathOrUri, String fieldName) {
-        if (profile.intent() == QueryIntent.GENERAL) return 0.0;
-        String path = sectionPathOrUri == null ? "" : sectionPathOrUri.toLowerCase(java.util.Locale.ROOT);
-        String field = fieldName == null ? "" : fieldName.toLowerCase(java.util.Locale.ROOT);
-        String domainToken = extractDomainToken(query);
-
-        boolean positive = profile.positivePathTokens().stream().anyMatch(path::contains)
-                || (profile.intent() == QueryIntent.COLOR
-                    && (field.contains("color") || field.contains("colour")));
-        boolean negative = profile.negativePathTokens().stream().anyMatch(path::contains)
-                || field.contains("analytics");
-        boolean domainMatch = StringUtils.hasText(domainToken)
-                && (path.contains("/" + domainToken) || path.contains(domainToken + "/"));
-
-        double delta = 0.0;
-        if (positive) delta += profile.positiveBoost();
-        if (negative) delta -= profile.negativePenalty();
-        if (StringUtils.hasText(domainToken)) {
-            delta += domainMatch ? profile.domainMatchBoost() : -profile.domainMismatchPenalty();
-        }
-
-        // Compare intent: keep CTA fragments from dominating ranking.
-        if (profile.intent() == QueryIntent.COMPARE) {
-            boolean ctaLikeField = field.contains("cta")
-                    || field.contains("calltoaction")
-                    || field.contains("action")
-                    || field.contains("button")
-                    || field.contains("link");
-            if (ctaLikeField && positive) delta -= 0.05;
-        }
-        return delta;
-    }
 
     /**
      * Returns deterministic intent priority bucket for tie-breaking.
@@ -1481,160 +1588,26 @@ public class VectorSearchService {
         return current;
     }
 
-    /**
-     * Shape-agnostic canonical grouping root:
-     * - starts from the existing base path
-     * - strips trailing field/leaf segments from section path/uri when detected
-     * - prefers the most specific non-leaf candidate
-     * Example: canonicalGroupPath("/a/chip/title001","/a/chip/title001",..., "title001") -> "/a/chip".
-     */
-    private String canonicalGroupPath(String basePath, String sectionPath, String sectionUri, String fieldName) {
-        List<String> candidates = new ArrayList<>();
-        if (StringUtils.hasText(basePath)) {
-            candidates.add(trimTrailingSlash(basePath));
-        }
-        for (String raw : List.of(sectionPath, sectionUri, basePath)) {
-            if (!StringUtils.hasText(raw)) continue;
-            String trimmed = trimTrailingSlash(raw);
-            candidates.add(trimmed);
-            String strippedByField = stripTrailingFieldSegment(trimmed, fieldName);
-            if (StringUtils.hasText(strippedByField)) {
-                candidates.add(strippedByField);
-            }
-            String strippedLeaf = stripTrailingLeafSegment(trimmed);
-            if (StringUtils.hasText(strippedLeaf)) {
-                candidates.add(strippedLeaf);
-            }
-        }
-        if (candidates.isEmpty()) {
-            return basePath;
-        }
-        String best = candidates.get(0);
-        int bestScore = groupingCandidateScore(best);
-        for (String candidate : candidates) {
-            int score = groupingCandidateScore(candidate);
-            if (score > bestScore) {
-                best = candidate;
-                bestScore = score;
-            }
-        }
-        return best;
-    }
 
-    /**
-     * Normalizes a path-like string by removing trailing '/' characters
-     * while preserving root-like values such as "/".
-     * Example: trimTrailingSlash("/a/b///") -> "/a/b".
-     */
-    private String trimTrailingSlash(String value) {
-        if (!StringUtils.hasText(value)) return value;
-        String out = value;
-        while (out.length() > 1 && out.endsWith("/")) {
-            out = out.substring(0, out.length() - 1);
-        }
-        return out;
-    }
-
-    /**
-     * Removes the last path segment when it matches the current field name
-     * (after alphanumeric normalization). This helps collapse
-     * ".../chip/techSpecsRowHeader001" to ".../chip" when the leaf is a field node.
-     * Example: stripTrailingFieldSegment("/x/chip/row001","row001") -> "/x/chip".
-     */
-    private String stripTrailingFieldSegment(String path, String fieldName) {
-        if (!StringUtils.hasText(path) || !StringUtils.hasText(fieldName)) return null;
-        int idx = path.lastIndexOf('/');
-        if (idx <= 0) return null;
-        String leaf = path.substring(idx + 1);
-        String normalizedLeaf = leaf.replaceAll("[^a-zA-Z0-9]", "").toLowerCase(java.util.Locale.ROOT);
-        String normalizedField = fieldName.replaceAll("[^a-zA-Z0-9]", "").toLowerCase(java.util.Locale.ROOT);
-        if (!normalizedLeaf.isEmpty() && normalizedLeaf.equals(normalizedField)) {
-            return path.substring(0, idx);
-        }
-        return null;
-    }
-
-    /**
-     * Removes the last path segment when it looks like a leaf/detail node.
-     * Used as a generic fallback when no direct field-name match exists.
-     * Example: stripTrailingLeafSegment("/x/chip/techSpecsRowHeader001") -> "/x/chip".
-     */
-    private String stripTrailingLeafSegment(String path) {
-        if (!StringUtils.hasText(path)) return null;
-        int idx = path.lastIndexOf('/');
-        if (idx <= 0) return null;
-        String leaf = path.substring(idx + 1);
-        if (isLikelyLeafSegment(leaf)) {
-            return path.substring(0, idx);
-        }
-        return null;
-    }
-
-    /**
-     * Heuristic leaf detector for path segments that represent detail rows/items
-     * rather than semantic group roots. Numeric-heavy and known leaf-pattern
-     * names are treated as leaf nodes.
-     * Example: isLikelyLeafSegment("capacityListItem001") -> true.
-     */
-    private boolean isLikelyLeafSegment(String segment) {
-        if (!StringUtils.hasText(segment)) return false;
-        String s = segment.toLowerCase(java.util.Locale.ROOT);
-        if (s.matches(".*\\d{2,}.*")) return true;
-        return GENERIC_LEAF_SEGMENT_PATTERN.matcher(s).matches();
-    }
-
-    /**
-     * Scores a grouping-root candidate path.
-     * Higher depth is preferred (more specific), but likely leaf endings are penalized
-     * so stable semantic parent nodes win over field-level leaves.
-     * Example: groupingCandidateScore("/x/chip") > groupingCandidateScore("/x/chip/row001").
-     */
-    private int groupingCandidateScore(String path) {
-        if (!StringUtils.hasText(path)) return Integer.MIN_VALUE;
-        String[] segments = path.split("/");
-        int depth = 0;
-        for (String seg : segments) {
-            if (StringUtils.hasText(seg)) depth++;
-        }
-        int penalty = 0;
-        int idx = path.lastIndexOf('/');
-        if (idx >= 0 && idx < path.length() - 1) {
-            String leaf = path.substring(idx + 1);
-            if (isLikelyLeafSegment(leaf)) {
-                penalty = 2;
-            }
-        }
-        return depth - penalty;
-    }
-
-    /**
-     * Returns canonical compare group path when a path belongs to a compare subtree.
-     * Prefers the first available source among basePath, sectionPath, sectionUri.
-     * Example: "/en_US/airpods/.../compare/feature001" -> "/en_US/airpods/.../compare".
-     */
-    private String canonicalCompareGroupPath(String basePath, String sectionPath, String sectionUri) {
-        for (String candidate : List.of(basePath, sectionPath, sectionUri)) {
-            if (!StringUtils.hasText(candidate)) continue;
-            String lower = candidate.toLowerCase(java.util.Locale.ROOT);
-            int idx = lower.indexOf("/compare/");
-            if (idx >= 0) {
-                return candidate.substring(0, idx + "/compare".length());
-            }
-            if (lower.endsWith("/compare")) {
-                return candidate;
-            }
-        }
-        return null;
-    }
     /**
      * Helper struct for ranking.
      * Example: SectionScore(score=0.72,pathAlignment=0.9) outranks lower-score peers.
      */
     private static class SectionScore {
         ConsolidatedEnrichedSection section;
+        /**
+         * -- GETTER --
+         * Example: getScore() -> 0.734 for a strong match section.
+         */
+        @Getter
         double score;
         int hitCount;
         String baseComponentPath;
+        /**
+         * -- GETTER --
+         * Example: getPathAlignment() -> 1.0 when query tokens fully match path/field tokens.
+         */
+        @Getter
         double pathAlignment;
         SectionScore(ConsolidatedEnrichedSection section, double score, int hitCount, String baseComponentPath, double pathAlignment) {
             this.section = section;
@@ -1643,10 +1616,6 @@ public class VectorSearchService {
             this.baseComponentPath = baseComponentPath;
             this.pathAlignment = pathAlignment;
         }
-        /** Example: getScore() -> 0.734 for a strong match section. */
-        public double getScore() { return score; }
-        /** Example: getPathAlignment() -> 1.0 when query tokens fully match path/field tokens. */
-        public double getPathAlignment() { return pathAlignment; }
     }
 
 }

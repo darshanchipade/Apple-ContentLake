@@ -112,7 +112,7 @@ public class HtmlTransformationAdapter {
                 payload.getSourceUri() != null ? payload.getSourceUri() : "");
 
         // 4b. AI-Grade Fallback: If raw HTML is dumped without a mapped PageId,
-        // natively extract Apple OM / SEO tags!
+        // natively extract Apple OG / SEO tags!
         if (payload.getPageId() == null || payload.getPageId().isEmpty()) {
             String omnitureName = doc.select("meta[property=analytics-ac-pageName]").attr("content");
             if (omnitureName != null && !omnitureName.isEmpty()) {
@@ -301,9 +301,9 @@ public class HtmlTransformationAdapter {
                 };
         // Helper: extract a human-readable region label from an element by trying multiple
         // Apple analytics attributes in priority order.
-        //   1. data-analytics-activitymap-region-id   → "in the box"
-        //   2. data-analytics-section-engagement       → "name:buystrip hero" → "buystrip hero"
-        //   3. data-analytics-region                   → raw value
+        //   1. data-analytics-activitymap-region-id    "in the box"
+        //   2. data-analytics-section-engagement       "name:buystrip hero" > "buystrip hero"
+        //   3. data-analytics-region                    raw value
         java.util.function.Function<org.jsoup.nodes.Element, String> extractRegionRaw = el -> {
             if (el.hasAttr("data-analytics-activitymap-region-id")) {
                 return el.attr("data-analytics-activitymap-region-id").trim();

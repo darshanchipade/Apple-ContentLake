@@ -152,4 +152,15 @@ public interface ConsolidatedEnrichedSectionRepository extends JpaRepository<Con
           OR section_path LIKE CONCAT(:path, '-%')
        """, nativeQuery = true)
    List<ConsolidatedEnrichedSection> findAllBySectionPathOrDescendants(@Param("path") String path);
+
+   /**
+    * Loads all consolidated sections on a specific page matching an analytics region slug from the JSON context.
+    * Used for structurally perfect UI clustering by gathering all fragments that share this tagged region.
+    */
+   @Query(value = """
+       SELECT * FROM consolidated_enriched_sections
+       WHERE source_uri = :sourceUri 
+         AND LOWER(context->'facets'->>'analyticsRegionSlug') = LOWER(:slug)
+       """, nativeQuery = true)
+   List<ConsolidatedEnrichedSection> findAllBySourceUriAndAnalyticsRegionSlug(@Param("sourceUri") String sourceUri, @Param("slug") String slug);
 }

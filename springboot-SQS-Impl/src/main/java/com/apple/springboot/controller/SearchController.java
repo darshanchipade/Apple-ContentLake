@@ -85,7 +85,8 @@ public class SearchController {
             @ApiResponse(responseCode = "200", description = "Successfully retrieved search results", content = @Content(mediaType = "application/json", schema = @Schema(implementation = SearchResultDto.class))),
             @ApiResponse(responseCode = "500", description = "Internal server error", content = @Content)
     })
-    @PostMapping("/search")
+
+
     public List<SearchResultDto> search(@RequestBody SearchRequest request) throws IOException {
         ParsedQuery parsedQuery = queryParsingService.parseQuery(request.getQuery());
 
@@ -170,7 +171,7 @@ public class SearchController {
         log.info("Semantic search request query='{}'", clip(rawQuery));
 
         // Enterprise-grade hybrid semantic search pipeline (dense + lexical + llm rank + pack assembly)
-        List<SemanticSectionResultDto> results = vectorSearchService.hybridSearch(rawQuery, 20);
+        List<SemanticSectionResultDto> results = vectorSearchService.contextAwareHybridSearch(rawQuery, 20);
 
         // Collect unique section paths (the parent containers) to look up ALL associated images for these sections
         List<String> sectionPaths = results.stream()

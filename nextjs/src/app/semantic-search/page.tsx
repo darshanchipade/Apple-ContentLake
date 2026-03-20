@@ -74,9 +74,6 @@ export default function SemanticSearchPage() {
         </div>
         <div className="card px-4 py-8 lg:px-16 lg:py-12">
           <div className="flex justify-end gap-4 text-sm font-semibold text-primary">
-            <a href="/search" className="hover:underline">
-              Search Finder
-            </a>
             <a href="/chatbot" className="hover:underline">
               Open Chatbot
             </a>

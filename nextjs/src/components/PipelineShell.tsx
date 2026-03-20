@@ -30,7 +30,6 @@ const workspaceLinks = [
   { label: "Workspace Overview", href: "/ingestion", icon: HomeModernIcon },
   { label: "Upload Activity", href: "/ingestion/activity", icon: CloudArrowUpIcon },
   { label: "Pipeline Health", href: "/extraction", icon: ArrowTrendingUpIcon },
-  { label: "Search Finder", href: "/search", icon: MagnifyingGlassIcon },
   { label: "Semantic Search", href: "/semantic-search", icon: MagnifyingGlassIcon },
   { label: "Asset Finder", href: "/asset-finder", icon: PhotoIcon },
 ];

@@ -124,7 +124,7 @@ export default function ChatbotPage() {
         <div className="flex flex-col gap-4 card px-4 py-6 lg:px-8">
           <div className="flex items-center justify-between">
             <h2 className="text-2xl font-semibold text-gray-900">Chatbot</h2>
-            <a href="/search" className="text-sm font-semibold text-primary hover:underline">
+            <a href="/semantic-search" className="text-sm font-semibold text-primary hover:underline">
               Back to Search
             </a>
           </div>

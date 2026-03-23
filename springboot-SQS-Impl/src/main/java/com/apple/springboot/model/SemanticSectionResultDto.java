@@ -29,6 +29,10 @@ public class SemanticSectionResultDto {
     public String getSectionPath() { return sectionPath; }
     public void setSectionPath(String sectionPath) { this.sectionPath = sectionPath; }
     
+    private List<String> clusterPaths;
+    public List<String> getClusterPaths() { return clusterPaths; }
+    public void setClusterPaths(List<String> clusterPaths) { this.clusterPaths = clusterPaths; }
+    
     private String sectionUri;
     public String getSectionUri() { return sectionUri; }
     public void setSectionUri(String sectionUri) { this.sectionUri = sectionUri; }

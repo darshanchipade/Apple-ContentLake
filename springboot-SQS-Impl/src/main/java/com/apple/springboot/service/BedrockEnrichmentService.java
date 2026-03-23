@@ -170,6 +170,20 @@ public class BedrockEnrichmentService {
         Map<String, Object> results = new HashMap<>();
         results.put("enrichedWithModel", effectiveModelId);
 
+        String cleansedContent = itemContent.path("cleansedContent").asText("");
+        if (cleansedContent.isBlank() || cleansedContent.length() <= 3) {
+            logger.info("Content is nearly empty (length: {}). Bypassing LLM and returning default enrichment for: {}", cleansedContent.length(), sourcePath);
+            Map<String, Object> defaultEnrichments = new HashMap<>();
+            defaultEnrichments.put("summary", "");
+            defaultEnrichments.put("keywords", new ArrayList<>());
+            defaultEnrichments.put("sentiment", "neutral");
+            defaultEnrichments.put("classification", "unknown");
+            defaultEnrichments.put("tags", new ArrayList<>());
+            
+            results.put("standardEnrichments", defaultEnrichments);
+            return results;
+        }
+
         try {
             String prompt = createEnrichmentPrompt(itemContent, context);
 
@@ -206,6 +220,13 @@ public class BedrockEnrichmentService {
                     if (textContent.endsWith("```")) {
                         textContent = textContent.substring(0, textContent.length() - 3).trim();
                     }
+                }
+
+                // Strictly bound the JSON to avoid conversational wrappers like "Here is the JSON:\n { ... }"
+                int firstBrace = textContent.indexOf('{');
+                int lastBrace = textContent.lastIndexOf('}');
+                if (firstBrace != -1 && lastBrace != -1 && lastBrace >= firstBrace) {
+                    textContent = textContent.substring(firstBrace, lastBrace + 1);
                 }
 
                 if (textContent.startsWith("{") && textContent.endsWith("}")) {

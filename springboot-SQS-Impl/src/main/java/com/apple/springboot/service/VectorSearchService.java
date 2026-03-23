@@ -116,10 +116,7 @@ public class VectorSearchService {
      */
     @Transactional(readOnly = true)
     public List<SemanticSectionResultDto> contextAwareHybridSearch(String query, int limit) throws IOException {
-        final QueryIntent intent = detectIntent(query);
-        final IntentProfile intentProfile = profileForIntent(intent);
         final QueryScope queryScope = extractQueryScope(query);
-        final boolean isCompareIntent = intent == QueryIntent.COMPARE;
 
         // V8 LLM Pre-Retrieval Prediction
         SlugPrediction prediction = predictRoutingSlug(query);
@@ -150,43 +147,7 @@ public class VectorSearchService {
         scopedLexicalHits.forEach(h -> scopedChunkIds.add(h.getContentChunk().getId()));
 
         // Map section URI -> List of hitting chunks (from both dense and lexical)
-        Map<String, List<ContentChunkWithDistance>> sectionHits = new HashMap<>();
-        Map<String, ConsolidatedEnrichedSection> sectionMap = new HashMap<>();
 
-        // Group dense hits
-        for (ContentChunkWithDistance hit : denseHits) {
-            String uri = hit.getContentChunk().getConsolidatedEnrichedSection().getSectionUri();
-            String path = hit.getContentChunk().getConsolidatedEnrichedSection().getSectionPath();
-            
-            // Exclude global navigation/hidden structural files entirely
-            if (path != null && path.contains("/global-elements/")) {
-                continue;
-            }
-
-            sectionHits.computeIfAbsent(uri, k -> new ArrayList<>()).add(hit);
-            sectionMap.putIfAbsent(uri, hit.getContentChunk().getConsolidatedEnrichedSection());
-        }
-
-        // Group lexical hits (avoid duplicate chunks if already found by dense)
-        for (ContentChunkWithDistance lHit : lexicalHits) {
-            String uri = lHit.getContentChunk().getConsolidatedEnrichedSection().getSectionUri();
-            String path = lHit.getContentChunk().getConsolidatedEnrichedSection().getSectionPath();
-            
-            // Output Shaping: Exclude global navigation/hidden structural files entirely
-            if (path != null && path.contains("/global-elements/")) {
-                continue;
-            }
-
-            sectionMap.putIfAbsent(uri, lHit.getContentChunk().getConsolidatedEnrichedSection());
-            List<ContentChunkWithDistance> currentHits = sectionHits.computeIfAbsent(uri, k -> new ArrayList<>());
-            boolean alreadyExists = currentHits.stream().anyMatch(
-                    h -> h.getContentChunk().getId().equals(lHit.getContentChunk().getId()));
-            if (!alreadyExists) {
-                // To keep math simple, we assign a simulated dense distance for pure lexical hits
-                // Standard pgvector distance: 0.0 is perfect, 1.0 is unrelated. Lexical gets 0.45.
-                currentHits.add(new ContentChunkWithDistance(lHit.getContentChunk(), 0.45));
-            }
-        }
 
         // Combine dense and lexical hits into a single map of ContentChunk (to avoid duplicates, merging scoped too)
         Map<UUID, ContentChunkWithDistance> combinedHits = new HashMap<>();
@@ -235,8 +196,7 @@ public class VectorSearchService {
             }
             if (excluded) continue;
 
-            String
-                    baseComponentPath = null;
+            String baseComponentPath = null;
             Object facetsObj = section.getContext() != null ? section.getContext().get("facets") : null;
             if (facetsObj instanceof java.util.Map<?, ?> facets) {
                 Object slugObj = facets.get("analyticsRegionSlug");
@@ -330,23 +290,53 @@ public class VectorSearchService {
             // V5 Context Metadata Scoring
             double contextBonus = 0.0;
             if (section.getContext() != null) {
-                String queryLower = query.toLowerCase(java.util.Locale.ROOT);
+                // Tokenize query for flexible metadata intersection (e.g. "phone" matches "iphone")
+                List<String> queryTokens = java.util.Arrays.stream(query.toLowerCase(java.util.Locale.ROOT).split("[^\\p{L}\\p{N}]+"))
+                        .filter(s -> s.length() >= 3 && !LEXICAL_STOPWORDS.contains(s)) // Require meaningful nouns
+                        .collect(Collectors.toList());
+                
                 // 1. Bedrock Tags Bonus
                 Object tagsObj = section.getContext().get("tags");
                 if (tagsObj instanceof java.util.List<?> tagsList) {
                     for (Object tag : tagsList) {
-                        if (tag != null && queryLower.contains(tag.toString().toLowerCase(java.util.Locale.ROOT))) {
-                            contextBonus += 0.15;
-                            break; // Apply bonus once
+                        if (tag != null) {
+                            String tagStr = tag.toString().toLowerCase(java.util.Locale.ROOT);
+                            if (queryTokens.stream().anyMatch(tagStr::contains)) {
+                                contextBonus += 0.15;
+                                break; // Apply bonus once
+                            }
                         }
                     }
                 }
-                // 2. Page Title / Facet Bonus
+                // 1.5 Keywords Bonus
+                Object keywordsObj = section.getContext().get("keywords");
+                if (keywordsObj instanceof java.util.List<?> keywordsList) {
+                    for (Object kw : keywordsList) {
+                        String kwStr = kw != null ? kw.toString().toLowerCase(java.util.Locale.ROOT) : "";
+                        if (!kwStr.isEmpty() && queryTokens.stream().anyMatch(kwStr::contains)) {
+                            contextBonus += 0.15;
+                            break; 
+                        }
+                    }
+                }
+
+                // 2. Page Title / Facet / Summary Bonus
                 Object facetsObj = section.getContext().get("facets");
                 if (facetsObj instanceof java.util.Map<?, ?> facets) {
                     Object titleObj = facets.get("pageTitle");
-                    if (titleObj != null && queryLower.contains(titleObj.toString().toLowerCase(java.util.Locale.ROOT))) {
-                        contextBonus += 0.10;
+                    if (titleObj != null) {
+                        String titleStr = titleObj.toString().toLowerCase(java.util.Locale.ROOT);
+                        if (queryTokens.stream().anyMatch(titleStr::contains)) {
+                            contextBonus += 0.10;
+                        }
+                    }
+                    Object summaryObj = facets.get("summary");
+                    if (summaryObj == null) summaryObj = facets.get("description");
+                    if (summaryObj != null) {
+                        String summaryLower = summaryObj.toString().toLowerCase(java.util.Locale.ROOT);
+                        if (queryTokens.stream().anyMatch(summaryLower::contains)) {
+                            contextBonus += 0.10;
+                        }
                     }
                 }
             }
@@ -403,17 +393,14 @@ public class VectorSearchService {
                 .comparingDouble(SectionScore::getScore).reversed()
                 .thenComparing(Comparator.comparingDouble(SectionScore::getPathAlignment).reversed()));
 
-        // Deterministic compare-intent ordering guardrail:
-        // ensure compare sections for the requested product family surface first.
-        boolean useDeterministicSort = intentProfile.deterministicSort() || queryScope.urlQuery();
+        // Deterministic URL ordering guardrail:
+        // ensure exact URL lookups override semantic scores.
+        boolean useDeterministicSort = queryScope.urlQuery();
         if (useDeterministicSort) {
             scoredSections.sort((a, b) -> {
                 int sa = scopePriority(queryScope, a.section);
                 int sb = scopePriority(queryScope, b.section);
                 if (sa != sb) return Integer.compare(sa, sb);
-                int pa = intentPriority(intentProfile, query, a.section);
-                int pb = intentPriority(intentProfile, query, b.section);
-                if (pa != pb) return Integer.compare(pa, pb);
                 int pathCmp = Double.compare(b.pathAlignment, a.pathAlignment);
                 if (pathCmp != 0) return pathCmp;
                 return Double.compare(b.score, a.score);
@@ -428,16 +415,13 @@ public class VectorSearchService {
         // Keep pure hybrid ordering here regardless of runtime property overrides.
 
         // Final ordering for response:
-        // - compare intent: keep deterministic compare-priority guardrail
-        // - non-compare: pure score desc
+        // - exact URL lookups: preserve URL deterministic priority
+        // - natural language: pure LLM-boosted semantic score descending
         if (useDeterministicSort) {
             topKForRerank.sort((a, b) -> {
                 int sa = scopePriority(queryScope, a.section);
                 int sb = scopePriority(queryScope, b.section);
                 if (sa != sb) return Integer.compare(sa, sb);
-                int pa = intentPriority(intentProfile, query, a.section);
-                int pb = intentPriority(intentProfile, query, b.section);
-                if (pa != pb) return Integer.compare(pa, pb);
                 int pathCmp = Double.compare(b.pathAlignment, a.pathAlignment);
                 if (pathCmp != 0) return pathCmp;
                 return Double.compare(b.score, a.score);
@@ -461,18 +445,13 @@ public class VectorSearchService {
             if (!StringUtils.hasText(path) && ss.section != null) {
                 path = ss.section.getSectionUri();
             }
-            int resolvedIntentPriority = useDeterministicSort
-                    ? intentPriority(intentProfile, query, ss.section)
-                    : -1;
             int resolvedScopePriority = queryScope.urlQuery() ? scopePriority(queryScope, ss.section) : -1;
-            logger.info("Final rank {}: path='{}', score={}, pathAlign={}, hits={}, intent={}, intentPriority={}, scopePriority={}",
+            logger.info("Final rank {}: path='{}', score={}, pathAlign={}, hits={}, scopePriority={}",
                     i + 1,
                     path,
                     String.format("%.3f", ss.score),
                     String.format("%.3f", ss.pathAlignment),
                     ss.hitCount,
-                    intent.name(),
-                    resolvedIntentPriority,
                     resolvedScopePriority);
         }
 
@@ -491,14 +470,7 @@ public class VectorSearchService {
             if (StringUtils.hasText(ss.baseComponentPath)) {
                 sp = ss.baseComponentPath;
             }
-            // For compare-intent, fetch pack fragments from the canonical compare root
-            // so we don't anchor cards to a random compare child node.
-            if (isCompareIntent && StringUtils.hasText(ss.baseComponentPath)) {
-                String lower = ss.baseComponentPath.toLowerCase(java.util.Locale.ROOT);
-                if (lower.contains("/compare")) {
-                    sp = ss.baseComponentPath;
-                }
-            }
+
             if (sp != null && !sp.isBlank()) topSectionPaths.add(sp);
         }
 
@@ -690,17 +662,29 @@ public class VectorSearchService {
             dto.setHitCount(ss.hitCount);
             
             // Use a representative non-CTA fragment when possible so section cards do not
-            // default to CTA rows like "learn more" for compare intent.
+            // default to CTA rows like "learn more".
             ConsolidatedEnrichedSection representative = pickRepresentativeFragment(
                     fragmentsByBaseComponent.getOrDefault(baseComponentPath, List.of(ss.section)),
-                    ss.section,
-                    isCompareIntent
+                    ss.section
             );
 
             // Store FULL path here for UI and image logic in SearchController.
             dto.setSectionPath(representative.getSectionPath());
-            // Set the sectionUri to the base component path so SearchController can match images correctly
-            dto.setSectionUri(baseComponentPath);
+            
+            // Set the sectionUri to the structural base component path so SearchController can exact-match images.
+            // (We cannot use 'baseComponentPath' variable here because hijacked it to store "slug:...")
+            String structuralUri = representative.getSectionUri() != null ? representative.getSectionUri() : representative.getSectionPath();
+            dto.setSectionUri(getBaseComponentPath(structuralUri));
+            
+            // Expose ALL native paths in the semantic cluster to SearchController for exact surgical image matching
+            List<ConsolidatedEnrichedSection> clusterFragments = fragmentsByBaseComponent.getOrDefault(baseComponentPath, List.of(ss.section));
+            List<String> clusterPaths = clusterFragments.stream()
+                .map(f -> getBaseComponentPath(f.getSectionUri() != null ? f.getSectionUri() : f.getSectionPath()))
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .collect(java.util.stream.Collectors.toList());
+            dto.setClusterPaths(clusterPaths);
+
             dto.setSourceUrl(representative.getSourceUri());
             dto.setFinalScore(ss.score);
 
@@ -719,13 +703,7 @@ public class VectorSearchService {
             // (2) AEM sections (banner-card-section, etc.): use section_path hierarchy to include
             //     descendant cards (e.g. banner-card-section-items/apple-pencil header/bodyCopy)
             String hitSectionPath = ss.section.getSectionPath();
-            // Keep compare result packs scoped to canonical compare root when available.
-            if (isCompareIntent && StringUtils.hasText(baseComponentPath)) {
-                String lower = baseComponentPath.toLowerCase(java.util.Locale.ROOT);
-                if (lower.contains("/compare")) {
-                    hitSectionPath = baseComponentPath;
-                }
-            }
+
             final String effectiveHitSectionPath = hitSectionPath;
             List<ConsolidatedEnrichedSection> fragments;
             if (effectiveHitSectionPath != null && HTML_SECTION_PATTERN.matcher(effectiveHitSectionPath).matches()) {
@@ -800,10 +778,7 @@ public class VectorSearchService {
                             if (kw.endsWith("_")) return roleLower.startsWith(kw);
                             return roleLower.contains(kw);
                         });
-                        boolean isA11yCandidate = roleLower.contains("a11y") || roleLower.contains("accessibility");
-                        // Intent profile can allow a11y rows when they carry useful answer attributes (e.g., colors).
-                        if (roleLower.startsWith("analytics")
-                                || (shouldSkip && !(intentProfile.keepA11yRows() && isA11yCandidate))) {
+                        if (roleLower.startsWith("analytics") || shouldSkip) {
                             continue;
                         }
                     }
@@ -867,11 +842,7 @@ public class VectorSearchService {
                                 href = pairedHref;
                             }
                         }
-                        // For compare intent, keep content rows focused on comparison/spec data first.
-                        // We still retain some CTA links, but avoid CTA-only packs.
-                        if (isCompareIntent && isCtaRole && genericLearnMore && nonCtaRows >= 2) {
-                            continue;
-                        }
+
 
                         contentList.add(new ContentRoleDto(role, text, href));
                         if (!isCtaRole) {
@@ -1009,23 +980,6 @@ public class VectorSearchService {
         return Math.max(1, text.length() / 400);
     }
 
-    private enum QueryIntent {
-        GENERAL,
-        COMPARE,
-        COLOR
-    }
-
-    private record IntentProfile(
-            QueryIntent intent,
-            boolean deterministicSort,
-            boolean keepA11yRows,
-            List<String> positivePathTokens,
-            List<String> negativePathTokens,
-            double positiveBoost,
-            double negativePenalty,
-            double domainMatchBoost,
-            double domainMismatchPenalty
-    ) {}
 
     private record QueryScope(
             String siteToken,
@@ -1033,57 +987,7 @@ public class VectorSearchService {
             boolean urlQuery
     ) {}
 
-    /**
-     * Detects query intent profile bucket.
-     * Example: detectIntent("compare iphone 17 and iphone 16") -> COMPARE.
-     */
-    private QueryIntent detectIntent(String query) {
-        if (isCompareIntentQuery(query)) return QueryIntent.COMPARE;
-        if (isColorIntentQuery(query)) return QueryIntent.COLOR;
-        return QueryIntent.GENERAL;
-    }
 
-    /**
-     * Resolves scoring/sorting profile for a detected intent.
-     * Example: profileForIntent(COLOR) enables deterministic sort and keeps a11y rows.
-     */
-    private IntentProfile profileForIntent(QueryIntent intent) {
-        return switch (intent) {
-            case COMPARE -> new IntentProfile(
-                    QueryIntent.COMPARE,
-                    true,
-                    false,
-                    List.of("/compare", "compare-", "models", "specs"),
-                    List.of("/analytics", "/a11y/", "-a11y"),
-                    0.15,
-                    0.12,
-                    0.08,
-                    0.12
-            );
-            case COLOR -> new IntentProfile(
-                    QueryIntent.COLOR,
-                    true,
-                    true,
-                    List.of("/buy", "shop", "/color"),
-                    List.of("/analytics"),
-                    1.1,
-                    0.2,
-                    1.0,
-                    0.9
-            );
-            default -> new IntentProfile(
-                    QueryIntent.GENERAL,
-                    false,
-                    false,
-                    List.of(),
-                    List.of("/analytics", "/a11y/", "-a11y"),
-                    1.0,
-                    0.1,
-                    1.0,
-                    1.0
-            );
-        };
-    }
 
     private record SlugPrediction(String slug, double confidence) {}
 
@@ -1161,76 +1065,7 @@ public class VectorSearchService {
      * Example: compare path with "/compare" gets positive boost in COMPARE intent.
      */
 
-    /**
-     * Returns deterministic intent priority bucket for tie-breaking.
-     * Example: compare+domain-matched section -> priority 0 (best).
-     */
-    private int intentPriority(IntentProfile profile, String query, ConsolidatedEnrichedSection section) {
-        if (section == null) return 4;
-        if (profile.intent() == QueryIntent.GENERAL) return 0;
-        String path = section.getSectionPath();
-        if (!StringUtils.hasText(path)) path = section.getSectionUri();
-        String p = path == null ? "" : path.toLowerCase(java.util.Locale.ROOT);
-        String field = section.getOriginalFieldName() == null
-                ? ""
-                : section.getOriginalFieldName().toLowerCase(java.util.Locale.ROOT);
-        String domain = extractDomainToken(query);
 
-        boolean positive = profile.positivePathTokens().stream().anyMatch(p::contains)
-                || (profile.intent() == QueryIntent.COLOR && (field.contains("color") || field.contains("colour")));
-        boolean negative = profile.negativePathTokens().stream().anyMatch(p::contains)
-                || field.contains("analytics");
-        boolean domainMatch = StringUtils.hasText(domain) && (p.contains("/" + domain) || p.contains(domain + "/"));
-
-        if (positive && domainMatch) return 0;
-        if (positive) return 1;
-        if (domainMatch && !negative) return 2;
-        if (!negative) return 3;
-        return 4;
-    }
-
-    /**
-     * True when query text indicates compare intent.
-     * Example: isCompareIntentQuery("ipad vs macbook") -> true.
-     */
-    private boolean isCompareIntentQuery(String query) {
-        if (!StringUtils.hasText(query)) return false;
-        String q = query.toLowerCase(java.util.Locale.ROOT);
-        return q.contains("compare")
-                || q.contains(" vs ")
-                || q.contains("difference")
-                || q.contains("which model")
-                || q.contains("which one");
-    }
-
-    /**
-     * True when query text indicates color/finish intent.
-     * Example: isColorIntentQuery("iphone 17 pro colors") -> true.
-     */
-    private boolean isColorIntentQuery(String query) {
-        if (!StringUtils.hasText(query)) return false;
-        String q = query.toLowerCase(java.util.Locale.ROOT);
-        return q.contains("color")
-                || q.contains("colors")
-                || q.contains("colour")
-                || q.contains("colours")
-                || q.contains("finish")
-                || q.contains("available color")
-                || q.contains("available colours");
-    }
-
-    /**
-     * Extracts coarse product-domain token from query.
-     * Example: extractDomainToken("best airpods model") -> "airpods".
-     */
-    private String extractDomainToken(String query) {
-        if (!StringUtils.hasText(query)) return null;
-        String q = query.toLowerCase(java.util.Locale.ROOT);
-        for (String token : List.of("airpods", "ipad", "iphone", "mac", "watch", "vision")) {
-            if (q.contains(token)) return token;
-        }
-        return null;
-    }
 
     /**
      * Generic query-to-structure alignment score.
@@ -1324,6 +1159,27 @@ public class VectorSearchService {
             } catch (Exception ignored) {
                 return new QueryScope(null, null, false);
             }
+        } else if (q.length() > 0) {
+            String lowerQ = q.toLowerCase(java.util.Locale.ROOT);
+            String siteToken = null;
+            if (lowerQ.contains("iphone") || lowerQ.contains("phone") || lowerQ.contains("ios")) {
+                siteToken = "iphone";
+            } else if (lowerQ.contains("ipad")) {
+                siteToken = "ipad";
+            } else if (lowerQ.contains("mac")) {
+                siteToken = "mac";
+            } else if (lowerQ.contains("watch")) {
+                siteToken = "watch";
+            } else if (lowerQ.contains("vision")) {
+                siteToken = "vision";
+            } else if (lowerQ.contains("airpod")) {
+                siteToken = "airpods";
+            } else if (lowerQ.contains("tv") || lowerQ.contains("homepod")) {
+                siteToken = "tv-home";
+            }
+            if (siteToken != null) {
+                return new QueryScope(siteToken, null, false);
+            }
         }
 
         return new QueryScope(null, null, false);
@@ -1351,9 +1207,13 @@ public class VectorSearchService {
      * Example: scoped site mismatch receives negative delta.
      */
     private double queryScopeAdjustment(QueryScope scope, String sectionPathOrUri, String fieldName) {
-        if (scope == null || !scope.urlQuery()) {
+        if (scope == null) {
             return 0.0;
         }
+        if (!scope.urlQuery() && !StringUtils.hasText(scope.siteToken())) {
+            return 0.0;
+        }
+
         String path = sectionPathOrUri == null ? "" : sectionPathOrUri.toLowerCase(java.util.Locale.ROOT);
         String field = fieldName == null ? "" : fieldName.toLowerCase(java.util.Locale.ROOT);
 
@@ -1364,16 +1224,18 @@ public class VectorSearchService {
         double delta = 0.0;
         if (StringUtils.hasText(scope.siteToken())) {
             if (siteMatch) {
-                delta += 0.22;
+                delta += scope.urlQuery() ? 0.22 : 0.15;
             } else {
-                delta -= 0.24;
+                delta -= scope.urlQuery() ? 0.24 : 0.45; // Massive penalty for cross-domain NLP hits
             }
         }
-        if (StringUtils.hasText(scope.pageContext())) {
-            delta += pageMatch ? 0.12 : -0.10;
-        }
-        if (analytics) {
-            delta -= 0.25;
+        if (scope.urlQuery()) {
+            if (StringUtils.hasText(scope.pageContext())) {
+                delta += pageMatch ? 0.12 : -0.10;
+            }
+            if (analytics) {
+                delta -= 0.25;
+            }
         }
         return delta;
     }
@@ -1415,7 +1277,7 @@ public class VectorSearchService {
      * Example: among [headline, cta-link], headline is selected as representative.
      */
     private ConsolidatedEnrichedSection pickRepresentativeFragment(List<ConsolidatedEnrichedSection> fragments,
-            ConsolidatedEnrichedSection fallback, boolean isCompareIntent) {
+            ConsolidatedEnrichedSection fallback) {
         if (fragments == null || fragments.isEmpty()) {
             return fallback;
         }
@@ -1438,18 +1300,7 @@ public class VectorSearchService {
                 rank = 2;
             }
 
-            if (isCompareIntent) {
-                String sp = f.getSectionPath() == null ? "" : f.getSectionPath().toLowerCase(java.util.Locale.ROOT);
-                String txt = f.getCleansedText() == null ? "" : f.getCleansedText().toLowerCase(java.util.Locale.ROOT);
-                // Prefer explicit compare/spec/model fragments for compare queries
-                if (sp.contains("/compare") || sp.contains("compare-") || sp.contains("models") || sp.contains("specs")) {
-                    rank -= 2;
-                }
-                // De-prioritize generic CTA rows as representative
-                if (txt.equals("learn more") || txt.startsWith("learn more ")) {
-                    rank += 2;
-                }
-            }
+
 
             if (rank < bestRank) {
                 bestRank = rank;

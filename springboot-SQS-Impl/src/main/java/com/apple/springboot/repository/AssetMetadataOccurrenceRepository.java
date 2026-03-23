@@ -60,8 +60,9 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
          * Performs Asset Finder filtering with optional exact-match filters.
          */
         @Query(value = """
-                        select distinct on (o.catalog_id) o.*
+                        select distinct on (coalesce(c.interactive_path, c.preview_uri)) o.*
                         from public.asset_metadata_occurrence o
+                        inner join public.asset_metadata_catalog c on o.catalog_id = c.id
                         where (:tenant is null or lower(convert_from(cast(o.tenant as bytea), 'UTF8')) = lower(cast(:tenant as text)))
                           and o.active = true
                           and (:environment is null or lower(convert_from(cast(o.environment as bytea), 'UTF8')) = lower(cast(:environment as text)))
@@ -72,14 +73,12 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
                               )
                           and (:geo is null or lower(convert_from(cast(o.geo as bytea), 'UTF8')) = lower(cast(:geo as text)))
                           and (:locale is null or lower(convert_from(cast(o.locale as bytea), 'UTF8')) = lower(cast(:locale as text)))
-                          and o.catalog_id not in (
-                                select c.id from public.asset_metadata_catalog c
-                                where c.interactive_path like '%unresolved-css-sprite%'
-                          )
-                        order by o.catalog_id, o.created_at desc
+                          and (c.interactive_path is null or c.interactive_path not like '%unresolved-css-sprite%')
+                        order by coalesce(c.interactive_path, c.preview_uri), o.created_at desc
                         """, countQuery = """
-                        select count(distinct o.catalog_id)
+                        select count(distinct coalesce(c.interactive_path, c.preview_uri))
                         from public.asset_metadata_occurrence o
+                        inner join public.asset_metadata_catalog c on o.catalog_id = c.id
                         where (:tenant is null or lower(convert_from(cast(o.tenant as bytea), 'UTF8')) = lower(cast(:tenant as text)))
                           and o.active = true
                           and (:environment is null or lower(convert_from(cast(o.environment as bytea), 'UTF8')) = lower(cast(:environment as text)))
@@ -90,10 +89,7 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
                               )
                           and (:geo is null or lower(convert_from(cast(o.geo as bytea), 'UTF8')) = lower(cast(:geo as text)))
                           and (:locale is null or lower(convert_from(cast(o.locale as bytea), 'UTF8')) = lower(cast(:locale as text)))
-                          and o.catalog_id not in (
-                                select c.id from public.asset_metadata_catalog c
-                                where c.interactive_path like '%unresolved-css-sprite%'
-                          )
+                          and (c.interactive_path is null or c.interactive_path not like '%unresolved-css-sprite%')
                         """, nativeQuery = true)
         Page<AssetMetadataOccurrence> search(
                         @Param("tenant") String tenant,
@@ -186,7 +182,7 @@ public interface AssetMetadataOccurrenceRepository extends JpaRepository<AssetMe
          * Used as a fallback when sectionPath matching fails (e.g. HTML content sections).
          * Each element is an Object[] of [sectionPath, sectionUri, assetModel, altText, interactivePath].
          */
-        @Query("select o.sectionPath, o.sectionUri, c.assetModel, c.altText, c.interactivePath from AssetMetadataOccurrence o " +
+        @Query("select o.sectionPath, o.sectionUri, c.assetModel, c.altText, c.interactivePath, o.sourceUri from AssetMetadataOccurrence o " +
                "join AssetMetadataCatalog c on o.catalogId = c.id " +
                "where o.sourceUri in :sourceUris and o.active = true " +
                "and c.interactivePath is not null and c.interactivePath not like '#%' " +

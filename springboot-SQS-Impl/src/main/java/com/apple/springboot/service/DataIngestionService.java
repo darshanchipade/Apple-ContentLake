@@ -1760,8 +1760,15 @@ public class DataIngestionService {
 
         // Strip HTML tags
         cleansed = cleansed.replaceAll("<[^>]+?>", " ");
-        // Normalize unicode NBSP if present
-        cleansed = cleansed.replace('\u00A0', ' ');
+        
+        // Decode structural HTML entities (e.g. &nbsp;, &amp;, &#8209;)
+        cleansed = org.jsoup.parser.Parser.unescapeEntities(cleansed, false);
+        
+        // Normalize unicode spacing and typography safety bounds
+        cleansed = cleansed.replace('\u00A0', ' ');      // Non-breaking space
+        cleansed = cleansed.replace('\u2011', '-');      // Non-breaking hyphen
+        cleansed = cleansed.replace('\u202F', ' ');      // Narrow no-break space
+        
         // Collapse whitespace
         cleansed = cleansed.replaceAll("\\s+", " ").trim();
         return cleansed;

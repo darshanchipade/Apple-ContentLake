@@ -175,7 +175,9 @@ public class SearchController {
 
         // Collect unique section paths (the parent containers) to look up ALL associated images for these sections
         List<String> sectionPaths = results.stream()
-                .map(SemanticSectionResultDto::getSectionPath)
+                .flatMap(r -> r.getClusterPaths() != null && !r.getClusterPaths().isEmpty()
+                        ? r.getClusterPaths().stream()
+                        : java.util.stream.Stream.of(r.getSectionPath()))
                 .filter(java.util.Objects::nonNull)
                 .distinct()
                 .collect(Collectors.toList());
@@ -226,7 +228,8 @@ public class SearchController {
                 }
 
                 for (Object[] row : imageRows) {
-                    String imageSectionUri = row[1] != null ? row[1].toString() : null;
+                    // Fall back to sectionPath if sectionUri is unpopulated (typical for AEM JSON content)
+                    String imageSectionUri = row[1] != null ? row[1].toString() : (row[0] != null ? row[0].toString() : null);
                     String type = row[2] != null ? row[2].toString() : "image";
                     String label = row[3] != null ? row[3].toString() : "";
                     String url = row[4] != null ? normalizeMediaUrl(row[4].toString()) : null;
@@ -247,7 +250,8 @@ public class SearchController {
                 if (!sourceUris.isEmpty()) {
                     List<Object[]> s2Rows = assetMetadataOccurrenceRepository.findImageUrlsWithUrisBySourceUris(sourceUris);
                     for (Object[] row : s2Rows) {
-                        String srcUri = row[0] != null ? row[0].toString() : null;
+                        // row[5] is the newly exposed o.sourceUri
+                        String srcUri = row.length > 5 && row[5] != null ? row[5].toString() : null;
                         String type   = row[2] != null ? row[2].toString() : "image";
                         String label  = row[3] != null ? row[3].toString() : "";
                         String url    = row[4] != null ? normalizeMediaUrl(row[4].toString()) : null;
@@ -273,11 +277,22 @@ public class SearchController {
 
         for (SemanticSectionResultDto result : results) {
             String uri = result.getSectionUri();
-            // Primary: exact slot-path match (works for AEM JSON content)
+            // Primary: exact structural match via getBaseComponentPath
             List<MediaItemDto> media = sectionMedia.get(uri);
-            // Fallback: for HTML semantic sections with no direct image match,
-            // show the best images from anywhere on the same page.
-            if ((media == null || media.isEmpty()) && uri != null && uri.contains("html-content-section")) {
+            
+            // Secondary Primary: look for any exact matching image belonging to sibling fragments natively in the UI cluster
+            if ((media == null || media.isEmpty()) && result.getClusterPaths() != null) {
+                for (String cpath : result.getClusterPaths()) {
+                    List<MediaItemDto> cMedia = sectionMedia.get(cpath);
+                    if (cMedia != null && !cMedia.isEmpty()) {
+                        media = cMedia;
+                        break;
+                    }
+                }
+            }
+
+            // Fallback: if no direct image match within the strict AI cluster bounds, show the best images from anywhere on the same page.
+            if ((media == null || media.isEmpty())) {
                 String pageUrl = result.getSourceUrl();
                 if (pageUrl != null) {
                     media = pageMedia.get(pageUrl);

@@ -392,6 +392,15 @@ public class VectorSearchService {
         scoredSections.sort(Comparator
                 .comparingDouble(SectionScore::getScore).reversed()
                 .thenComparing(Comparator.comparingDouble(SectionScore::getPathAlignment).reversed()));
+        if ("compare".equalsIgnoreCase(detectedSlug)) {
+            scoredSections.sort((a, b) -> {
+                int scoreCmp = Double.compare(b.score, a.score);
+                if (scoreCmp != 0) return scoreCmp;
+                int pathCmp = Double.compare(b.pathAlignment, a.pathAlignment);
+                if (pathCmp != 0) return pathCmp;
+                return Integer.compare(b.hitCount, a.hitCount);
+            });
+        }
 
         // Deterministic URL ordering guardrail:
         // ensure exact URL lookups override semantic scores.
@@ -403,7 +412,12 @@ public class VectorSearchService {
                 if (sa != sb) return Integer.compare(sa, sb);
                 int pathCmp = Double.compare(b.pathAlignment, a.pathAlignment);
                 if (pathCmp != 0) return pathCmp;
-                return Double.compare(b.score, a.score);
+                int scoreCmp = Double.compare(b.score, a.score);
+                if (scoreCmp != 0) return scoreCmp;
+                if ("compare".equalsIgnoreCase(detectedSlug)) {
+                    return Integer.compare(b.hitCount, a.hitCount);
+                }
+                return 0;
             });
         }
 
@@ -424,12 +438,26 @@ public class VectorSearchService {
                 if (sa != sb) return Integer.compare(sa, sb);
                 int pathCmp = Double.compare(b.pathAlignment, a.pathAlignment);
                 if (pathCmp != 0) return pathCmp;
-                return Double.compare(b.score, a.score);
+                int scoreCmp = Double.compare(b.score, a.score);
+                if (scoreCmp != 0) return scoreCmp;
+                if ("compare".equalsIgnoreCase(detectedSlug)) {
+                    return Integer.compare(b.hitCount, a.hitCount);
+                }
+                return 0;
             });
         } else {
             topKForRerank.sort(Comparator
                     .comparingDouble(SectionScore::getScore).reversed()
                     .thenComparing(Comparator.comparingDouble(SectionScore::getPathAlignment).reversed()));
+            if ("compare".equalsIgnoreCase(detectedSlug)) {
+                topKForRerank.sort((a, b) -> {
+                    int scoreCmp = Double.compare(b.score, a.score);
+                    if (scoreCmp != 0) return scoreCmp;
+                    int pathCmp = Double.compare(b.pathAlignment, a.pathAlignment);
+                    if (pathCmp != 0) return pathCmp;
+                    return Integer.compare(b.hitCount, a.hitCount);
+                });
+            }
         }
 
         // Debug visibility: log final ranked list after all ordering logic.

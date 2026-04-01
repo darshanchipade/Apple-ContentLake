@@ -54,6 +54,7 @@ public class HtmlTransformationAdapter {
         // /iphone-17-pro/       -> "iphone-17-pro"
         // /                      -> "index"
         String derivedPageId = payload.getPageId();
+        String derivedLocale = payload.getLocale();
         if (derivedPageId == null || derivedPageId.isEmpty()) {
             String path = URI.create(payload.getUrl()).getPath();
             // Strip leading/trailing slashes
@@ -62,7 +63,14 @@ public class HtmlTransformationAdapter {
                 derivedPageId = "index";
             } else {
                 String[] segments = path.split("/");
-                derivedPageId = segments.length > 0 ? segments[0] : "index";
+                int pageIdOffset = 0;
+                if (segments.length > 0 && segments[0].matches("^[a-z]{2}(-[a-zA-Z]{2,3})?$")) {
+                    if (derivedLocale == null || derivedLocale.isEmpty()) {
+                        derivedLocale = segments[0];
+                    }
+                    pageIdOffset = 1;
+                }
+                derivedPageId = segments.length > pageIdOffset ? segments[pageIdOffset] : "index";
             }
         }
 
@@ -70,7 +78,7 @@ public class HtmlTransformationAdapter {
         downstreamPayload.setSourceUri(payload.getUrl());
         downstreamPayload.setHtmlContent(response.body());
         downstreamPayload.setPageId(derivedPageId);
-        downstreamPayload.setLocale(payload.getLocale() != null ? payload.getLocale() : "en_US");
+        downstreamPayload.setLocale(derivedLocale != null && !derivedLocale.isEmpty() ? derivedLocale : "en_US");
 
         return processRawHtml(downstreamPayload);
     }
@@ -128,6 +136,14 @@ public class HtmlTransformationAdapter {
             }
         }
 
+        String baseUrl = "https://www.apple.com";
+        if (payload.getSourceUri() != null && !payload.getSourceUri().isEmpty()) {
+            try {
+                URI sourceUri = URI.create(payload.getSourceUri());
+                baseUrl = sourceUri.getScheme() + "://" + sourceUri.getHost();
+            } catch (Exception ignored) {}
+        }
+
         // 1. First, attempt to build a map of CSS classes to real Image URLs
         java.util.Map<String, String> cssClassToImageUrl = new java.util.HashMap<>();
 
@@ -141,7 +157,7 @@ public class HtmlTransformationAdapter {
                 String className = m.group(1);
                 String bgUrl = m.group(2);
                 if (bgUrl.startsWith("/")) {
-                    bgUrl = "https://www.apple.com" + bgUrl;
+                    bgUrl = baseUrl + bgUrl;
                 }
                 if (className.contains("image") || className.contains("icon") || className.contains("asset") 
                         || className.contains("thumb") || className.contains("logo") || className.contains("graphic")
@@ -184,13 +200,7 @@ public class HtmlTransformationAdapter {
                 try {
                     String absoluteUrl = href;
                     if (href.startsWith("/")) {
-                        // Fallback domain, ideally we'd use payload.getSourceUri() base
-                        try {
-                            URI sourceUri = URI.create(payload.getSourceUri());
-                            absoluteUrl = sourceUri.getScheme() + "://" + sourceUri.getHost() + href;
-                        } catch (Exception e) {
-                            absoluteUrl = "https://www.apple.com" + href;
-                        }
+                        absoluteUrl = baseUrl + href;
                     }
 
                     if (absoluteUrl.startsWith("http")) {
@@ -210,7 +220,7 @@ public class HtmlTransformationAdapter {
                                 String className = m.group(1);
                                 String bgUrl = m.group(2);
                                 if (bgUrl.startsWith("/")) {
-                                    bgUrl = "https://www.apple.com" + bgUrl;
+                                    bgUrl = baseUrl + bgUrl;
                                 }
                                 if (className.contains("image") || className.contains("icon")) {
                                     cssClassToImageUrl.put(className, bgUrl);

@@ -47,6 +47,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.net.URI;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -702,7 +703,7 @@ public class AssetImageStoreService {
                     detail.setSectionPath(occurrence.getSectionPath());
                     detail.setSectionUri(occurrence.getSectionUri());
                     detail.setAssetNodePath(occurrence.getAssetNodePath());
-                    detail.setInteractivePath(toApplePublicUrl(catalog.getInteractivePath()));
+                    detail.setInteractivePath(toApplePublicUrl(catalog.getInteractivePath(), occurrence.getSectionUri()));
                     detail.setPreviewUri(catalog.getPreviewUri());
                     detail.setAltText(catalog.getAltText());
                     detail.setAccessibilityText(catalog.getAccessibilityText());
@@ -965,7 +966,7 @@ public class AssetImageStoreService {
 
         String previewUri = resolvePreviewUri(effectiveNode);
         String interactivePath = firstNonBlank(previewUri, resolveUriFromNode(effectiveNode));
-        String publicInteractivePath = toApplePublicUrl(interactivePath);
+        String publicInteractivePath = toApplePublicUrl(interactivePath, rawDataStore.getSourceUri());
         String altText = firstNonBlank(extractCopyField(effectiveNode.get("alt")), extractCopyField(assetNode.get("alt")));
         String accessibilityText = firstNonBlank(extractCopyField(effectiveNode.get("accessibilityText")),
                 extractCopyField(assetNode.get("accessibilityText")));
@@ -1484,7 +1485,7 @@ public class AssetImageStoreService {
         if (catalog != null) {
             tile.setAssetKey(catalog.getAssetKey());
             tile.setAssetModel(catalog.getAssetModel());
-            tile.setInteractivePath(toApplePublicUrl(catalog.getInteractivePath()));
+            tile.setInteractivePath(toApplePublicUrl(catalog.getInteractivePath(), occurrence.getSectionUri()));
             tile.setPreviewUri(catalog.getPreviewUri());
             tile.setAltText(catalog.getAltText());
         }
@@ -1932,7 +1933,7 @@ public class AssetImageStoreService {
     /**
      * Prefixes relative asset paths with http://www.apple.com for UI links.
      */
-    private String toApplePublicUrl(String rawPath) {
+    private String toApplePublicUrl(String rawPath, String sourceUri) {
         String normalized = normalizeText(rawPath);
         if (normalized == null) {
             return null;
@@ -1940,10 +1941,23 @@ public class AssetImageStoreService {
         if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
             return normalized;
         }
-        if (normalized.startsWith("/")) {
-            return "http://www.apple.com" + normalized;
+        
+        String baseUrl = "http://www.apple.com";
+        if (sourceUri != null && !sourceUri.isBlank()) {
+            try {
+                URI uri = URI.create(sourceUri);
+                String host = uri.getHost();
+                if (host != null) {
+                    baseUrl = uri.getScheme() + "://" + host;
+                }
+            } catch (Exception ignored) {
+            }
         }
-        return "http://www.apple.com/" + normalized;
+
+        if (normalized.startsWith("/")) {
+            return baseUrl + normalized;
+        }
+        return baseUrl + "/" + normalized;
     }
 
     /**
@@ -2038,7 +2052,7 @@ public class AssetImageStoreService {
             SectionContext sectionContext,
             UploadRequestMetadata requestMetadata,
             RawDataStore rawDataStore) {
-        String publicInteractivePath = toApplePublicUrl(url);
+        String publicInteractivePath = toApplePublicUrl(url, rawDataStore.getSourceUri());
 
         ResolvedMetadata resolved = resolveMetadata(
                 requestMetadata,

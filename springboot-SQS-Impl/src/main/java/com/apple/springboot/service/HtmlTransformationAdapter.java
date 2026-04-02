@@ -22,6 +22,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
+import java.util.Locale;
 
 @Service
 @RequiredArgsConstructor
@@ -56,7 +57,16 @@ public class HtmlTransformationAdapter {
         String derivedPageId = payload.getPageId();
         String derivedLocale = payload.getLocale();
         if (derivedPageId == null || derivedPageId.isEmpty()) {
-            String path = URI.create(payload.getUrl()).getPath();
+            URI uri = URI.create(payload.getUrl());
+            String host = uri.getHost();
+            
+            if (host != null && (derivedLocale == null || derivedLocale.isEmpty())) {
+                if (host.endsWith(".com.cn") || host.endsWith(".cn")) {
+                    derivedLocale = "zh_CN";
+                }
+            }
+
+            String path = uri.getPath();
             // Strip leading/trailing slashes
             path = path.replaceAll("^/+|/+$", "");
             if (path.isEmpty()) {
@@ -66,7 +76,12 @@ public class HtmlTransformationAdapter {
                 int pageIdOffset = 0;
                 if (segments.length > 0 && segments[0].matches("^[a-z]{2}(-[a-zA-Z]{2,3})?$")) {
                     if (derivedLocale == null || derivedLocale.isEmpty()) {
-                        derivedLocale = segments[0];
+                        String storefront = segments[0];
+                        if (storefront.length() == 2) {
+                            derivedLocale = storefront.toLowerCase(Locale.ROOT) + "_" + storefront.toUpperCase(Locale.ROOT);
+                        } else {
+                            derivedLocale = storefront.replace("-", "_");
+                        }
                     }
                     pageIdOffset = 1;
                 }

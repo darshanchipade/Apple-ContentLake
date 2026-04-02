@@ -1597,15 +1597,24 @@ public class AssetImageStoreService {
         if (path == null) {
             return null;
         }
-        Matcher publicMatcher = SITE_FROM_PUBLIC_PATH.matcher(path);
+
+        String normalizedPath = path;
+        try {
+            if (path.startsWith("http")) {
+                normalizedPath = URI.create(path).getPath();
+            }
+        } catch (Exception ignored) {
+        }
+
+        Matcher publicMatcher = SITE_FROM_PUBLIC_PATH.matcher(normalizedPath);
         if (publicMatcher.find()) {
             return normalizeSiteBucket(publicMatcher.group(1));
         }
-        Matcher assetsMatcher = SITE_FROM_ASSET_PATH.matcher(path);
+        Matcher assetsMatcher = SITE_FROM_ASSET_PATH.matcher(normalizedPath);
         if (assetsMatcher.find()) {
             return normalizeSiteBucket(assetsMatcher.group(1));
         }
-        Matcher contentMatcher = SITE_FROM_CONTENT_PATH.matcher(path);
+        Matcher contentMatcher = SITE_FROM_CONTENT_PATH.matcher(normalizedPath);
         if (contentMatcher.find()) {
             return normalizeSiteBucket(contentMatcher.group(1));
         }
@@ -1642,10 +1651,16 @@ public class AssetImageStoreService {
      * Maps locale country values to the geo filter model.
      */
     private String geoFromLocale(String locale) {
-        if (locale == null || locale.length() < 5) {
+        if (locale == null) {
             return null;
         }
-        return locale.substring(3).toUpperCase(Locale.ROOT);
+        if (locale.length() == 2) {
+            return locale.toUpperCase(Locale.ROOT);
+        }
+        if (locale.length() >= 5) {
+            return locale.substring(3).toUpperCase(Locale.ROOT);
+        }
+        return null;
     }
 
     /**

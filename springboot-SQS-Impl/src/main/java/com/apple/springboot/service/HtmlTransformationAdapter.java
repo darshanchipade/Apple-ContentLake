@@ -554,12 +554,12 @@ public class HtmlTransformationAdapter {
                 "NON-LOSSY EXTRACTION RULES (MANDATORY):\n" +
                 "1) UNIQUE KEYS MANDATE: You MUST append a unique sequential number to EVERY top-level key (e.g. `featureCell042`, `airPods4Headline015`). Never reuse a key. If you use the same key twice, the JSON parser will silently delete the duplicate grid cell!\n"
                 +
-                "2) NEVER summarize. NEVER merge sibling rows/cells/items.\n" +
+                "2) HIERARCHICAL DOM NESTING: Preserve structural grouping via nested objects. If a container (`div`, `section`, `article`, `figure`, `table`) acts as a wrapper for child elements (like a headline and paragraphs, or a gallery and its images), create a single parent JSON object and place its children inside a nested property (e.g. `items` array or `children`). ONLY use flat top-level objects if the HTML elements are truly independent siblings.\n" +
                 "3) Extract EVERY node that is content-bearing: h1-h6, p, li, td, th, caption, figcaption, a, button, span (when text-bearing), any node with class containing: \"typography-\", \"row\", \"feature-wrapper\", \"subheading\", \"copy\", \"headline\", \naccessibility text nodes: \".visuallyhidden\", \".sr-only\", \"[aria-label]\", images/media/icons: img, picture, source, figure, svg, use, video[poster].\n"
                 +
                 "4) NO TRUNCATION: You are strictly forbidden from omitting items for brevity or summarizing long lists. You must extract every single item, no matter how long the list is. DO NOT add conversational comments like `// omitted for brevity` inside the JSON. The output must be 100% pure, valid JSON.\n"
                 +
-                "5) For tables/grids/comparison rows/spec lists: output ONE object per row/cell/feature point. Repeated-looking rows are still separate objects.\n"
+                "5) STRUCTURAL PRESERVATION: Do not artificially flatten structures. For tables, grids, comparison rows, or spec lists: if elements belong together (e.g. a capacity header and its data columns), nest them!\n"
                 +
                 "6) MANDATORY TEXT KEY: All readable text MUST be placed inside the `copy` property. NEVER use keys like `headline`, `title`, or `description` for text. If it is text, it goes in `copy`. Preserve inline semantic markup inside `copy` (<sup>, <br>, <strong>, etc).\n"
                 +

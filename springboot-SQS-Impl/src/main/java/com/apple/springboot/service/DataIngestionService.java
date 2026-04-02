@@ -45,7 +45,10 @@ public class DataIngestionService {
     private static final Set<String> CONTENT_FIELD_KEYS = Set.of(
             "copy", "disclaimers", "text", "url", "headline", "subheadline",
             "topic", "title", "eyebrow", "caption", "label", "cta",
-            "description", "summary", "heading"
+            "description", "summary", "heading", "features", "list", 
+            "items", "fullFeaturesList", "notes", "subtitle", "violator",
+            "price", "pricing", "legal", "button", "link", "href", 
+            "additionalCopy", "continuation"
     );
     private static final Set<String> ICON_NODE_KEYS = Set.of("icon");
     private static final Set<String> ICON_META_KEYS = Set.of("_path", "_uri_path");

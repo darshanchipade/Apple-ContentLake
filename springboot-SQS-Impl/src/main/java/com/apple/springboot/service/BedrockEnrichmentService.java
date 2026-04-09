@@ -214,63 +214,24 @@ public class BedrockEnrichmentService {
 
             if (contentBlock.isArray() && contentBlock.size() > 0) {
                 String textContent = contentBlock.get(0).path("text").asText("").trim();
+                String jsonCandidate = sanitizeJsonObjectCandidate(textContent);
+                Map<String, Object> aiResults = parseMapWithRecovery(jsonCandidate);
 
-                if (textContent.startsWith("```json")) {
-                    textContent = textContent.substring(7).trim();
-                    if (textContent.endsWith("```")) {
-                        textContent = textContent.substring(0, textContent.length() - 3).trim();
-                    }
+                if (aiResults == null) {
+                    String repaired = attemptEnrichmentJsonRepair(jsonCandidate, cleansedContent, context);
+                    aiResults = parseMapWithRecovery(repaired);
                 }
 
-                // Strictly bound the JSON to avoid conversational wrappers like "Here is the JSON:\n { ... }"
-                int firstBrace = textContent.indexOf('{');
-                int lastBrace = textContent.lastIndexOf('}');
-                if (firstBrace != -1 && lastBrace != -1 && lastBrace >= firstBrace) {
-                    textContent = textContent.substring(firstBrace, lastBrace + 1);
+                if (aiResults != null) {
+                    aiResults.put("enrichedWithModel", effectiveModelId);
+                    return aiResults;
                 }
 
-                if (textContent.startsWith("{") && textContent.endsWith("}")) {
-                    Map<String, Object> aiResults = null;
-
-                    // 1st attempt: strict JSON
-                    try {
-                        aiResults = objectMapper.readValue(textContent, new TypeReference<>() {});
-                    } catch (JsonProcessingException e1) {
-                        // 2nd attempt: relaxed Jackson (tolerates trailing commas, single quotes, unquoted keys)
-                        com.fasterxml.jackson.databind.ObjectMapper relaxed = new com.fasterxml.jackson.databind.ObjectMapper();
-                        relaxed.configure(com.fasterxml.jackson.core.JsonParser.Feature.ALLOW_TRAILING_COMMA, true);
-                        relaxed.configure(com.fasterxml.jackson.core.JsonParser.Feature.ALLOW_SINGLE_QUOTES, true);
-                        relaxed.configure(com.fasterxml.jackson.core.JsonParser.Feature.ALLOW_UNQUOTED_FIELD_NAMES, true);
-                        relaxed.configure(com.fasterxml.jackson.core.JsonParser.Feature.IGNORE_UNDEFINED, true);
-                        // 2a: as-is with relaxed parser
-                        String[] healingAttempts = { textContent, textContent + "}", textContent + "}}" };
-                        for (String attempt : healingAttempts) {
-                            try {
-                                aiResults = relaxed.readValue(attempt, new TypeReference<>() {});
-                                logger.warn("Enrichment JSON recovered via relaxed/healed parsing for: {}", textContent.substring(0, Math.min(80, textContent.length())));
-                                break;
-                            } catch (JsonProcessingException ignored) {
-                                // try next
-                            }
-                        }
-                        if (aiResults == null) {
-                            logger.error("Failed to parse JSON content from Bedrock response: {}. Error: {}", textContent, e1.getMessage());
-                            results.put("error", "Failed to parse JSON from Bedrock response");
-                            results.put("raw_bedrock_response", textContent);
-                            return results;
-                        }
-                    }
-
-                    if (aiResults != null) {
-                        aiResults.put("enrichedWithModel", effectiveModelId);
-                        return aiResults;
-                    }
-                } else {
-                    logger.error("Bedrock response content is not a JSON object after stripping fences: {}",
-                            textContent);
-                    results.put("error", "Bedrock response content is not a JSON object");
-                    results.put("raw_bedrock_response", textContent);
-                }
+                logger.error("Failed to parse JSON content from Bedrock response: {}",
+                        clipForLog(textContent, 2000));
+                results.put("error", "Failed to parse JSON from Bedrock response");
+                results.put("raw_bedrock_response", clipForLog(textContent, 2000));
+                return results;
             } else {
                 logger.error("Bedrock response does not contain expected content block or content is not an array.");
                 results.put("error", "Bedrock response structure unexpected");
@@ -292,6 +253,75 @@ public class BedrockEnrichmentService {
             return results;
         }
         return results;
+    }
+
+    private String sanitizeJsonObjectCandidate(String raw) {
+        if (raw == null) return "";
+        String text = raw.trim();
+        if (text.startsWith("```json")) {
+            text = text.substring(7).trim();
+        } else if (text.startsWith("```")) {
+            text = text.substring(3).trim();
+        }
+        if (text.endsWith("```")) {
+            text = text.substring(0, text.length() - 3).trim();
+        }
+
+        int firstBrace = text.indexOf('{');
+        int lastBrace = text.lastIndexOf('}');
+        if (firstBrace >= 0 && lastBrace > firstBrace) {
+            text = text.substring(firstBrace, lastBrace + 1);
+        }
+        return text;
+    }
+
+    private Map<String, Object> parseMapWithRecovery(String candidate) {
+        if (candidate == null || candidate.isBlank()) return null;
+
+        try {
+            return objectMapper.readValue(candidate, new TypeReference<>() {});
+        } catch (JsonProcessingException ignored) {
+        }
+
+        com.fasterxml.jackson.databind.ObjectMapper relaxed = new com.fasterxml.jackson.databind.ObjectMapper();
+        relaxed.configure(com.fasterxml.jackson.core.JsonParser.Feature.ALLOW_TRAILING_COMMA, true);
+        relaxed.configure(com.fasterxml.jackson.core.JsonParser.Feature.ALLOW_SINGLE_QUOTES, true);
+        relaxed.configure(com.fasterxml.jackson.core.JsonParser.Feature.ALLOW_UNQUOTED_FIELD_NAMES, true);
+        relaxed.configure(com.fasterxml.jackson.core.JsonParser.Feature.IGNORE_UNDEFINED, true);
+
+        String[] attempts = new String[] { candidate, candidate + "}", candidate + "}}", candidate + "\"}}" };
+        for (String attempt : attempts) {
+            try {
+                Map<String, Object> parsed = relaxed.readValue(attempt, new TypeReference<>() {});
+                logger.warn("Enrichment JSON recovered via relaxed/healed parser.");
+                return parsed;
+            } catch (JsonProcessingException ignored) {
+            }
+        }
+        return null;
+    }
+
+    private String attemptEnrichmentJsonRepair(String brokenJson, String cleansedContent, EnrichmentContext context) {
+        try {
+            String ctx = context != null ? objectMapper.writeValueAsString(context) : "{}";
+            String prompt = "You are a strict JSON repair engine.\n" +
+                    "Return ONLY valid JSON object with this exact top-level key: standardEnrichments.\n" +
+                    "Inside standardEnrichments keep keys: summary, keywords, sentiment, classification, tags.\n" +
+                    "No markdown, no commentary.\n\n" +
+                    "Input content:\n" + cleansedContent + "\n\n" +
+                    "Context:\n" + ctx + "\n\n" +
+                    "Broken response to repair:\n" + brokenJson;
+            String repaired = invokeChatForText(prompt, Math.min(1024, Math.max(256, bedrockMaxTokens)));
+            return sanitizeJsonObjectCandidate(repaired);
+        } catch (Exception e) {
+            logger.warn("Enrichment JSON repair pass failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private String clipForLog(String raw, int maxLen) {
+        if (raw == null) return "";
+        return raw.length() <= maxLen ? raw : raw.substring(0, maxLen) + "...";
     }
 
     /**

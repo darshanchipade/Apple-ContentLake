@@ -9,6 +9,7 @@ import jakarta.annotation.PostConstruct;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.micrometer.common.lang.Nullable;
 import org.slf4j.Logger;
@@ -42,10 +43,11 @@ public class DataIngestionService {
     private ContentHashingService contentHashingService;
 
     // Treat these as extractable content fields
+    /** Bedrock compact-list keys (string arrays) and legacy keys must stay in sync with HtmlTransformationAdapter prompt. */
     private static final Set<String> CONTENT_FIELD_KEYS = Set.of(
             "copy", "disclaimers", "text", "url", "headline", "subheadline",
             "topic", "title", "eyebrow", "caption", "label", "cta",
-            "description", "summary", "heading", "features", "list", 
+            "description", "summary", "heading", "features", "list", "bullets", "lines",
             "items", "fullFeaturesList", "notes", "subtitle", "violator",
             "price", "pricing", "legal", "button", "link", "href", 
             "additionalCopy", "continuation"
@@ -537,7 +539,7 @@ public class DataIngestionService {
                     "JSON payload cannot be null or empty for sourceIdentifier " + sourceIdentifier);
         }
 
-        String newContentHash = calculateContentHash(jsonPayload, null);
+        String newContentHash = calculateCanonicalPayloadHash(jsonPayload);
 
         // System-Wide Payload Hash Deduplication
         Optional<RawDataStore> existingMatchingContent = rawDataStoreRepository.findByContentHash(newContentHash);
@@ -631,7 +633,7 @@ public class DataIngestionService {
         rawDataStore.setRawContentText(jsonPayload);
         rawDataStore.setRawContentBinary(jsonPayload.getBytes(StandardCharsets.UTF_8));
         rawDataStore.setSourceContentType("application/json");
-        rawDataStore.setSourceMetadata(extractSourceMetadata(jsonPayload));
+        rawDataStore.setSourceMetadata(extractSourceMetadata(toJsonString(canonicalizePayloadForHashAndExtraction(jsonPayload))));
         applyUploadRequestMetadata(rawDataStore, uploadMetadata);
     }
 
@@ -651,7 +653,7 @@ public class DataIngestionService {
             rawDataStore.setSourceContentType("application/json");
         }
         if (rawDataStore.getSourceMetadata() == null) {
-            rawDataStore.setSourceMetadata(extractSourceMetadata(jsonPayload));
+            rawDataStore.setSourceMetadata(extractSourceMetadata(toJsonString(canonicalizePayloadForHashAndExtraction(jsonPayload))));
         }
         if (rawDataStore.getSourceRequestMetadata() == null || rawDataStore.getSourceRequestMetadata().isBlank()) {
             applyUploadRequestMetadata(rawDataStore, uploadMetadata);
@@ -726,7 +728,7 @@ public class DataIngestionService {
             RawDataStore rawDataStore,
             @Nullable CleansedDataStore existingCleansed) throws JsonProcessingException {
         try {
-            JsonNode rootNode = objectMapper.readTree(rawJsonContent);
+            JsonNode rootNode = canonicalizePayloadForHashAndExtraction(rawJsonContent);
             // Asset extraction is additive and fail-open; it must never break text
             // ingestion.
             try {
@@ -1228,6 +1230,11 @@ public class DataIngestionService {
             currentNode.fields().forEachRemaining(entry -> {
                 String fieldKey = entry.getKey();
                 JsonNode fieldValue = entry.getValue();
+                // Grouped HTML view is persisted for observability only. Do not traverse it for
+                // cleansing/enrichment extraction, otherwise items from `content` would be double-counted.
+                if ("contentGrouped".equals(fieldKey)) {
+                    return;
+                }
                 String fragmentPath = currentEnvelope.getSourcePath();
                 String containerPath = (parentEnvelope != null
                         && parentEnvelope.getSourcePath() != null
@@ -1664,7 +1671,7 @@ public class DataIngestionService {
                 }
             }
             node.fields().forEachRemaining(e -> {
-                if (!List.of("items", "children", "child", "value", "_id", "_model", "_path")
+                if (!List.of("items", "children", "child", "value", "_id", "_model", "_path", "contentGrouped")
                         .contains(e.getKey())) {
                     String childFieldKey = fieldKey + "[" + e.getKey() + "]";
                     processAnalyticsNode(e.getValue(), childFieldKey, analyticsEnvelope, facets, results, counters);
@@ -1709,6 +1716,95 @@ public class DataIngestionService {
             return bytesToHex(encodedhash);
         } catch (NoSuchAlgorithmException e) {
             throw new RuntimeException("SHA-256 algorithm not found", e);
+        }
+    }
+
+    /**
+     * Computes a payload-level dedup hash from canonical flat content.
+     * If `contentGrouped` exists (HTML additive view), ignore it so grouped-shape
+     * changes do not create new RawDataStore versions.
+     */
+    private String calculateCanonicalPayloadHash(String jsonPayload) {
+        if (jsonPayload == null) {
+            return null;
+        }
+        try {
+            JsonNode canonical = canonicalizePayloadForHashAndExtraction(jsonPayload);
+            return calculateContentHash(objectMapper.writeValueAsString(canonical), null);
+        } catch (Exception e) {
+            logger.debug("Unable to canonicalize payload for dedup hash, using raw payload hash. Reason: {}",
+                    e.getMessage());
+        }
+        return calculateContentHash(jsonPayload, null);
+    }
+
+    /**
+     * Produces canonical flat payload used by dedup and cleansing extraction.
+     * Supports grouped-first payloads by projecting contentGrouped[*].items[*] into
+     * content[] while preserving page metadata.
+     */
+    private JsonNode canonicalizePayloadForHashAndExtraction(String jsonPayload) {
+        if (jsonPayload == null || jsonPayload.isBlank()) {
+            return objectMapper.createObjectNode();
+        }
+        try {
+            JsonNode node = objectMapper.readTree(jsonPayload);
+            if (!(node instanceof ObjectNode rootObj)) {
+                return node;
+            }
+            ObjectNode canonical = rootObj.deepCopy();
+            if (canonical.has("content") && canonical.get("content").isArray()) {
+                canonical.remove("contentGrouped");
+                return canonical;
+            }
+
+            JsonNode grouped = canonical.get("contentGrouped");
+            if (grouped == null || !grouped.isArray()) {
+                return canonical;
+            }
+
+            ArrayNode projected = objectMapper.createArrayNode();
+            java.util.Set<String> seen = new java.util.LinkedHashSet<>();
+            for (JsonNode group : grouped) {
+                JsonNode items = group.path("items");
+                if (!items.isArray()) {
+                    continue;
+                }
+                for (JsonNode item : items) {
+                    if (!item.isObject()) {
+                        continue;
+                    }
+                    String key = item.path("_path").asText(null);
+                    if (key == null || key.isBlank()) {
+                        key = item.toString();
+                    }
+                    if (seen.add(key)) {
+                        projected.add(item.deepCopy());
+                    }
+                }
+            }
+
+            canonical.set("content", projected);
+            canonical.remove("contentGrouped");
+            return canonical;
+        } catch (Exception e) {
+            logger.debug("Unable to canonicalize grouped payload for extraction/hash. Reason: {}", e.getMessage());
+            try {
+                return objectMapper.readTree(jsonPayload);
+            } catch (Exception ignored) {
+                return objectMapper.createObjectNode();
+            }
+        }
+    }
+
+    private String toJsonString(JsonNode node) {
+        if (node == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(node);
+        } catch (JsonProcessingException e) {
+            return node.toString();
         }
     }
 

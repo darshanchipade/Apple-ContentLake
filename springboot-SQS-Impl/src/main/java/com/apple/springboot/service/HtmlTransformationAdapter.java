@@ -30,6 +30,11 @@ public class HtmlTransformationAdapter {
 
     private static final Logger logger = LoggerFactory.getLogger(HtmlTransformationAdapter.class);
 
+    /**
+     * Bump when HTML→section logic or path contract changes. Mixed into unstructured cache hash only.
+     */
+    private static final String UNSTRUCTURED_HTML_TRANSFORM_VERSION = "3";
+
     private final UnstructuredDataStoreRepository unstructuredDataStoreRepository;
     private final DataIngestionService dataIngestionService;
     private final BedrockEnrichmentService bedrockService;
@@ -102,11 +107,17 @@ public class HtmlTransformationAdapter {
      * Processes a Raw HTML extraction request with highly deterministic Hash
      * Deduplication.
      */
+    private static String computeUnstructuredHtmlMd5Hash(String htmlContent) {
+        String raw = htmlContent != null ? htmlContent : "";
+        return DigestUtils.md5DigestAsHex(
+                (UNSTRUCTURED_HTML_TRANSFORM_VERSION + "|" + raw).getBytes(StandardCharsets.UTF_8));
+    }
+
     public ObjectNode processRawHtml(UnstructuredIngestionPayload payload) throws Exception {
         logger.info("Processing RAW HTML from source: {}", payload.getSourceUri());
 
-        // 1. Calculate MD5 Hash of HTML
-        String htmlHash = DigestUtils.md5DigestAsHex(payload.getHtmlContent().getBytes(StandardCharsets.UTF_8));
+        // 1. Versioned MD5 (invalidates cache when UNSTRUCTURED_HTML_TRANSFORM_VERSION bumps)
+        String htmlHash = computeUnstructuredHtmlMd5Hash(payload.getHtmlContent());
 
         // 2. Check Deduplication to bypass LLM completely securely
         var existing = unstructuredDataStoreRepository.findBySourceUriAndHtmlMd5Hash(payload.getSourceUri(), htmlHash);
@@ -516,6 +527,12 @@ public class HtmlTransformationAdapter {
             contentArray.insert(0, analyticsNode);
         }
 
+        // Build an additive grouped representation for HTML consumers.
+        // This is persisted in raw payload for observability, but downstream extraction
+        // explicitly ignores this branch to avoid duplicate cleansing/enrichment.
+        ArrayNode groupedContent = buildGroupedContentForHtml(contentArray, payload.getPageId());
+        finalPayload.set("contentGrouped", groupedContent);
+
         logger.info("Successfully generated Canonical JSON array. Attempting DataIngestionService Hand-Off...");
 
         // Hand-off directly to the DataIngestionService to process natively!
@@ -524,11 +541,100 @@ public class HtmlTransformationAdapter {
 
         com.apple.springboot.model.UploadRequestMetadata uploadMetadata = com.apple.springboot.model.UploadRequestMetadata
                 .of(null, null, null, null, null, payload.getLocale());
+        // Persist grouped-first payload in raw_data_store; cleansing projects canonical
+        // flat leaves from this grouped view.
+        ObjectNode groupedIngestionPayload = objectMapper.createObjectNode();
+        groupedIngestionPayload.put("pageId", payload.getPageId());
+        groupedIngestionPayload.put("locale", payload.getLocale());
+        groupedIngestionPayload.set("contentGrouped", groupedContent.deepCopy());
         com.apple.springboot.model.CleansedDataStore cleansedStore = dataIngestionService.ingestAndCleanseJsonPayload(
-                finalPayload.toString(), "html-extraction:" + payload.getSourceUri(), uploadMetadata);
+                groupedIngestionPayload.toString(), "html-extraction:" + payload.getSourceUri(), uploadMetadata);
 
         finalPayload.put("cleansedId", cleansedStore.getId().toString());
         return finalPayload;
+    }
+
+    private ArrayNode buildGroupedContentForHtml(ArrayNode contentArray, String pageId) {
+        ArrayNode grouped = objectMapper.createArrayNode();
+        if (contentArray == null || contentArray.isEmpty()) {
+            return grouped;
+        }
+
+        java.util.Map<String, ObjectNode> buckets = new java.util.LinkedHashMap<>();
+        for (JsonNode node : contentArray) {
+            if (!(node instanceof ObjectNode item) || !item.has("_path") || !item.get("_path").isTextual()) {
+                continue;
+            }
+            String fullPath = item.get("_path").asText();
+            SectionPathInfo info = parseSectionPathInfo(fullPath);
+            String groupSlug;
+            String bucketKey;
+            String sectionBasePath;
+            String regionSlug;
+            if (info != null && info.baseSectionPath() != null && !info.baseSectionPath().isBlank()) {
+                sectionBasePath = info.baseSectionPath();
+                regionSlug = info.regionSlug();
+            } else {
+                int lastSlash = fullPath.lastIndexOf('/');
+                if (lastSlash <= 0) {
+                    continue;
+                }
+                sectionBasePath = fullPath.substring(0, lastSlash);
+                regionSlug = slugifySegment(fullPath.substring(lastSlash + 1));
+            }
+            if (regionSlug != null && !regionSlug.isBlank()) {
+                groupSlug = "section-group-" + regionSlug;
+                bucketKey = "region:" + sectionBasePath + ":" + regionSlug;
+            } else {
+                groupSlug = "section-group-ungrouped";
+                bucketKey = "region:" + sectionBasePath + ":ungrouped";
+            }
+
+            ObjectNode bucket = buckets.computeIfAbsent(bucketKey, k -> {
+                ObjectNode b = objectMapper.createObjectNode();
+                b.put("section_path", sectionBasePath + "/" + groupSlug);
+                b.put("group_name", groupSlug);
+                // Human-readable slug for the grouped section (e.g. "finish", "size-and-weight")
+                b.put("slugName", regionSlug != null && !regionSlug.isBlank() ? regionSlug : "ungrouped");
+                b.set("items", objectMapper.createArrayNode());
+                return b;
+            });
+            ((ArrayNode) bucket.get("items")).add(item.deepCopy());
+        }
+
+        for (ObjectNode bucket : buckets.values()) {
+            grouped.add(bucket);
+        }
+        return grouped;
+    }
+
+    private record SectionPathInfo(String baseSectionPath, String regionSlug) {}
+
+    private SectionPathInfo parseSectionPathInfo(String fullPath) {
+        if (fullPath == null || fullPath.isBlank()) {
+            return null;
+        }
+        java.util.regex.Pattern p = java.util.regex.Pattern
+                .compile("^(.*?/html-content-section\\[\\d+\\])(?:/([^/]+))?(?:/.*)?$");
+        java.util.regex.Matcher m = p.matcher(fullPath);
+        if (!m.matches()) {
+            return null;
+        }
+        String base = m.group(1);
+        String region = m.group(2);
+        if (region != null) {
+            region = slugifySegment(region);
+        }
+        return new SectionPathInfo(base, region);
+    }
+
+    private String slugifySegment(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        return raw.toLowerCase(java.util.Locale.ROOT)
+                .replaceAll("[^a-z0-9]+", "-")
+                .replaceAll("^-+|-+$", "");
     }
 
     private JsonNode invokeBedrockForChunk(String chunkHtml, ObjectMapper relaxedMapper) {
@@ -557,9 +663,9 @@ public class HtmlTransformationAdapter {
                 "2) HIERARCHICAL DOM NESTING: Preserve structural grouping via nested objects. If a container (`div`, `section`, `article`, `figure`, `table`) acts as a wrapper for child elements (like a headline and paragraphs, or a gallery and its images), create a single parent JSON object and place its children inside a nested property (e.g. `items` array or `children`). ONLY use flat top-level objects if the HTML elements are truly independent siblings.\n" +
                 "3) Extract EVERY node that is content-bearing: h1-h6, p, li, td, th, caption, figcaption, a, button, span (when text-bearing), any node with class containing: \"typography-\", \"row\", \"feature-wrapper\", \"subheading\", \"copy\", \"headline\", \naccessibility text nodes: \".visuallyhidden\", \".sr-only\", \"[aria-label]\", images/media/icons: img, picture, source, figure, svg, use, video[poster].\n"
                 +
-                "4) NO TRUNCATION: You are strictly forbidden from omitting items for brevity or summarizing long lists. You must extract every single item, no matter how long the list is. DO NOT add conversational comments like `// omitted for brevity` inside the JSON. The output must be 100% pure, valid JSON.\n"
+                "4) EXHAUSTIVE EXTRACTION (NO TRUNCATION): You are strictly forbidden from omitting items for brevity or summarizing long repetitive grids/lists. You MUST extract every single item exactly as it appears in the DOM, no matter how long the list is.\n"
                 +
-                "5) STRUCTURAL PRESERVATION: Do not artificially flatten structures. For tables, grids, comparison rows, or spec lists: if elements belong together (e.g. a capacity header and its data columns), nest them!\n"
+                "5) COMPACT ARRAYS FOR FLAT LISTS: If a list `<ul>` or grid row contains ONLY simple text items (no images, no links, no icons), DO NOT create verbose nested objects for every single `<li>`. Instead, output a single JSON array of plain strings under the key `features` or `items`. Example: `\"features\": [\"18MP Center Stage camera\", \"Autofocus with Focus\", \"Retina Flash\"]`. This mathematically prevents JSON payload exhaustion on massive specs lists.\n"
                 +
                 "6) MANDATORY TEXT KEY: All readable text MUST be placed inside the `copy` property. NEVER use keys like `headline`, `title`, or `description` for text. If it is text, it goes in `copy`. Preserve inline semantic markup inside `copy` (<sup>, <br>, <strong>, etc).\n"
                 +
@@ -581,53 +687,93 @@ public class HtmlTransformationAdapter {
 
         try {
             String bedrockResponse = bedrockService.invokeChatForText(prompt, 8192);
+            String cleaned = sanitizeModelOutput(bedrockResponse);
+            JsonNode bedrockArray = tryParseJsonWithRecovery(cleaned, relaxedMapper);
 
-            bedrockResponse = bedrockResponse.replaceAll("(?s)^```json\\s*", "")
-                    .replaceAll("(?s)^```\\s*", "")
-                    .replaceAll("(?s)\\s*```\\s*$", "")
-                    .trim();
-
-            String healingResponse = bedrockResponse;
-
-            int lastClosingBrace = healingResponse.lastIndexOf(']');
-            if (lastClosingBrace == -1) {
-                lastClosingBrace = healingResponse.lastIndexOf('}');
-            }
-            if (lastClosingBrace > 5) {
-                healingResponse = healingResponse.substring(0, lastClosingBrace + 1);
-            }
-
-            JsonNode bedrockArray = null;
-            try {
-                bedrockArray = relaxedMapper.readTree(healingResponse);
-            } catch (Exception e1) {
-                try {
-                    bedrockArray = relaxedMapper.readTree(healingResponse + "]");
-                } catch (Exception e2) {
-                    try {
-                        bedrockArray = relaxedMapper.readTree(healingResponse + "}]");
-                    } catch (Exception e3) {
-                        try {
-                            bedrockArray = relaxedMapper.readTree(healingResponse + "}}]");
-                        } catch (Exception e4) {
-                            try {
-                                bedrockArray = relaxedMapper.readTree(healingResponse + "\"}}]");
-                            } catch (Exception e5) {
-                                // Gracefully fail for this string chunk
-                            }
-                        }
-                    }
+            if (bedrockArray == null) {
+                String repaired = attemptJsonRepair(cleaned);
+                if (repaired != null && !repaired.isBlank()) {
+                    bedrockArray = tryParseJsonWithRecovery(repaired, relaxedMapper);
                 }
             }
 
             if (bedrockArray == null) {
-                logger.error("Relaxed Jackson completely failed to parse Bedrock chunk layout: " + bedrockResponse);
+                logger.error("Relaxed Jackson completely failed to parse Bedrock chunk layout: {}", clipForLog(bedrockResponse, 2000));
             }
             return bedrockArray;
         } catch (Exception ex) {
             logger.error("AwsBedrock SDK Exception caught while processing chunk: {}", ex.getMessage());
             return null;
         }
+    }
+
+    private String sanitizeModelOutput(String raw) {
+        if (raw == null) return "";
+        String cleaned = raw.replaceAll("(?s)^```json\\s*", "")
+                .replaceAll("(?s)^```\\s*", "")
+                .replaceAll("(?s)\\s*```\\s*$", "")
+                .trim();
+        int firstArray = cleaned.indexOf('[');
+        int lastArray = cleaned.lastIndexOf(']');
+        if (firstArray >= 0 && lastArray > firstArray) {
+            return cleaned.substring(firstArray, lastArray + 1);
+        }
+        int firstObject = cleaned.indexOf('{');
+        int lastObject = cleaned.lastIndexOf('}');
+        if (firstObject >= 0 && lastObject > firstObject) {
+            return cleaned.substring(firstObject, lastObject + 1);
+        }
+        return cleaned;
+    }
+
+    private JsonNode tryParseJsonWithRecovery(String candidate, ObjectMapper relaxedMapper) {
+        if (candidate == null || candidate.isBlank()) return null;
+        String healingResponse = candidate;
+        int lastClosingBrace = healingResponse.lastIndexOf(']');
+        if (lastClosingBrace == -1) {
+            lastClosingBrace = healingResponse.lastIndexOf('}');
+        }
+        if (lastClosingBrace > 5) {
+            healingResponse = healingResponse.substring(0, lastClosingBrace + 1);
+        }
+
+        String[] attempts = new String[] {
+                healingResponse,
+                healingResponse + "]",
+                healingResponse + "}]",
+                healingResponse + "}}]",
+                healingResponse + "\"}}]"
+        };
+
+        for (String attempt : attempts) {
+            try {
+                return relaxedMapper.readTree(attempt);
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    private String attemptJsonRepair(String brokenJson) {
+        try {
+            String prompt = "You are a strict JSON repair engine.\n" +
+                    "Fix malformed JSON and return ONLY valid JSON array/object.\n" +
+                    "Do not add explanation or markdown.\n" +
+                    "If arrays/objects are truncated, close them minimally.\n" +
+                    "Preserve original keys/values as much as possible.\n\n" +
+                    "BROKEN JSON:\n" + brokenJson;
+            String repaired = bedrockService.invokeChatForText(prompt, 8192);
+            return sanitizeModelOutput(repaired);
+        } catch (Exception e) {
+            logger.warn("JSON repair pass failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private String clipForLog(String raw, int maxLen) {
+        if (raw == null) return "";
+        if (raw.length() <= maxLen) return raw;
+        return raw.substring(0, maxLen) + "...";
     }
 
     private void chunkElement(org.jsoup.nodes.Element element, StringBuilder currentChunk,

@@ -202,6 +202,7 @@ public class EnrichmentProcessor {
                 ctx.put("sourcePath", itemDetail.sourcePath);
                 Map<String, Object> prov = new HashMap<>();
                 prov.put("modelId", bedrockEnrichmentService.getConfiguredModelId());
+                prov.put("provider", bedrockEnrichmentService.getActiveProviderName());
                 ctx.put("provenance", prov);
                 result.put("context", ctx);
 

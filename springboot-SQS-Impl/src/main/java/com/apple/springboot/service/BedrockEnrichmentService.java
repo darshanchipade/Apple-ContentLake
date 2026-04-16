@@ -28,6 +28,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.Locale;
 
 @Service
 public class BedrockEnrichmentService {
@@ -39,9 +40,17 @@ public class BedrockEnrichmentService {
     private final String bedrockRegion;
     private final String embeddingModelId;
     private final int bedrockMaxTokens;
+    private final FloodgateEnrichmentService floodgateEnrichmentService;
+    private final FloodgateEmbeddingService floodgateEmbeddingService;
+
+    @Value("${llm.provider:bedrock}")
+    private String llmProvider;
 
     @Value("${app.enrichment.computeItemVector:false}")
     private boolean computeItemVector;
+
+    @Value("${embedding.provider:bedrock}")
+    private String embeddingProvider;
 
     /**
      * Initializes the Bedrock client and model configuration.
@@ -51,12 +60,16 @@ public class BedrockEnrichmentService {
             @Value("${aws.region:us-east-1}") String region,
             @Value("${aws.bedrock.modelId}") String modelId,
             @Value("${aws.bedrock.embeddingModelId}") String embeddingModelId,
-            @Value("${app.bedrock.maxTokens:512}") int bedrockMaxTokens) {
+            @Value("${app.bedrock.maxTokens:512}") int bedrockMaxTokens,
+            FloodgateEnrichmentService floodgateEnrichmentService,
+            FloodgateEmbeddingService floodgateEmbeddingService) {
         this.objectMapper = objectMapper;
         this.bedrockRegion = region;
         this.bedrockModelId = modelId;
         this.embeddingModelId = embeddingModelId;
         this.bedrockMaxTokens = Math.max(128, bedrockMaxTokens);
+        this.floodgateEnrichmentService = floodgateEnrichmentService;
+        this.floodgateEmbeddingService = floodgateEmbeddingService;
 
         if (region == null) {
             logger.error("AWS Region for Bedrock is null. Cannot initialize BedrockRuntimeClient.");
@@ -79,13 +92,27 @@ public class BedrockEnrichmentService {
      * Returns the configured Bedrock model identifier.
      */
     public String getConfiguredModelId() {
-        return this.bedrockModelId;
+        return isFloodgateProvider() ? floodgateEnrichmentService.getConfiguredModelId() : this.bedrockModelId;
+    }
+
+    public String getActiveProviderName() {
+        return isFloodgateProvider() ? "floodgate" : "bedrock";
     }
 
     /**
      * Generates an embedding vector using the configured embedding model.
      */
     public float[] generateEmbedding(String text) throws IOException {
+        if (isFloodgateGoogleEmbeddingProvider()) {
+            logger.info("Generating embedding using provider='google-vertex' model='{}'",
+                    floodgateEmbeddingService.getConfiguredModelId());
+            float[] embedding = floodgateEmbeddingService.generateEmbedding(text);
+            logger.info("Embedding created using provider='google-vertex' model='{}' dimension={}",
+                    floodgateEmbeddingService.getConfiguredModelId(), embedding.length);
+            return embedding;
+        }
+
+        logger.info("Generating embedding using provider='titan' model='{}'", embeddingModelId);
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("inputText", text);
 
@@ -107,6 +134,8 @@ public class BedrockEnrichmentService {
             for (int i = 0; i < embeddingNode.size(); i++) {
                 embedding[i] = embeddingNode.get(i).floatValue();
             }
+            logger.info("Embedding created using provider='titan' model='{}' dimension={}",
+                    embeddingModelId, embedding.length);
             return embedding;
         } catch (ThrottledException te) {
             // IMPORTANT: bubble up so SQS listener does NOT delete the message
@@ -162,10 +191,13 @@ public class BedrockEnrichmentService {
      * metadata.
      */
     public Map<String, Object> enrichItem(JsonNode itemContent, EnrichmentContext context) {
-        String effectiveModelId = this.bedrockModelId;
+        boolean floodgate = isFloodgateProvider();
+        String providerName = floodgate ? "floodgate" : "bedrock";
+        String effectiveModelId = floodgate ? floodgateEnrichmentService.getConfiguredModelId() : this.bedrockModelId;
         String sourcePath = (context != null && context.getEnvelope() != null) ? context.getEnvelope().getSourcePath()
                 : "Unknown";
-        logger.info("Starting enrichment for item using model: {}. Item path: {}", effectiveModelId, sourcePath);
+        logger.info("Starting enrichment using provider='{}' model='{}'. Item path: {}",
+                providerName, effectiveModelId, sourcePath);
 
         Map<String, Object> results = new HashMap<>();
         results.put("enrichedWithModel", effectiveModelId);
@@ -186,6 +218,25 @@ public class BedrockEnrichmentService {
 
         try {
             String prompt = createEnrichmentPrompt(itemContent, context);
+            if (floodgate) {
+                String textContent = invokeChatForText(prompt, bedrockMaxTokens);
+                Map<String, Object> aiResults = parseMapWithRecovery(sanitizeJsonObjectCandidate(textContent));
+                if (aiResults == null) {
+                    String repaired = attemptEnrichmentJsonRepair(textContent, cleansedContent, context);
+                    aiResults = parseMapWithRecovery(repaired);
+                }
+                if (aiResults != null) {
+                    aiResults.put("enrichedWithModel", effectiveModelId);
+                    return aiResults;
+                }
+                logger.error("Failed to parse JSON content from provider='{}' model='{}' response: {}",
+                        providerName,
+                        effectiveModelId,
+                        clipForLog(textContent, 2000));
+                results.put("error", "Failed to parse JSON from Floodgate response");
+                results.put("raw_bedrock_response", clipForLog(textContent, 2000));
+                return results;
+            }
 
             ObjectNode payload = objectMapper.createObjectNode();
             payload.put("anthropic_version", "bedrock-2023-05-31");
@@ -241,15 +292,19 @@ public class BedrockEnrichmentService {
             // Crucial: let the caller (SQS listener) decide retry/delete; do not swallow
             throw te;
         } catch (BedrockRuntimeException e) {
-            logger.error("Bedrock API error during enrichment for model {}: {}", effectiveModelId,
+            logger.error("{} API error during enrichment for model {}: {}",
+                    providerName,
+                    effectiveModelId,
                     e.awsErrorDetails().errorMessage(), e);
-            results.put("error", "Bedrock API error: " + e.awsErrorDetails().errorMessage());
+            results.put("error", providerName + " API error: " + e.awsErrorDetails().errorMessage());
             results.put("aws_error_code", e.awsErrorDetails().errorCode());
             return results;
         } catch (Exception e) {
-            logger.error("Unexpected error during Bedrock enrichment for model {}: {}", effectiveModelId,
+            logger.error("Unexpected error during {} enrichment for model {}: {}",
+                    providerName,
+                    effectiveModelId,
                     e.getMessage(), e);
-            results.put("error", "Unexpected error during enrichment: " + e.getMessage());
+            results.put("error", "Unexpected error during " + providerName + " enrichment: " + e.getMessage());
             return results;
         }
         return results;
@@ -332,6 +387,9 @@ public class BedrockEnrichmentService {
     public String invokeChatForText(String content, Integer overrideMaxTokens) {
         String effectiveModelId = this.bedrockModelId;
         int maxTokens = overrideMaxTokens != null ? Math.max(64, overrideMaxTokens) : this.bedrockMaxTokens;
+        if (isFloodgateProvider()) {
+            return floodgateEnrichmentService.invokeChatForText(content, maxTokens);
+        }
 
         try {
             ObjectNode payload = objectMapper.createObjectNode();
@@ -385,6 +443,14 @@ public class BedrockEnrichmentService {
         } catch (Exception e) {
             throw new RuntimeException("Unexpected error during chat invoke: " + e.getMessage(), e);
         }
+    }
+
+    private boolean isFloodgateProvider() {
+        return llmProvider != null && "floodgate".equalsIgnoreCase(llmProvider.trim().toLowerCase(Locale.ROOT));
+    }
+
+    private boolean isFloodgateGoogleEmbeddingProvider() {
+        return embeddingProvider != null && "google".equalsIgnoreCase(embeddingProvider.trim().toLowerCase(Locale.ROOT));
     }
 
     /**
